@@ -20,6 +20,7 @@
 #define INCLUDE_OKVIS_VISLAMBACKEND_HPP_
 
 #include <atomic>
+#include <functional>
 
 #include <okvis/ViGraphEstimator.hpp>
 #include "se/map/map.hpp"
@@ -615,6 +616,27 @@ class ViSlamBackend //: public VioBackendInterface
 
   /// GPS STUFF COMES HERE...
 
+  /// \brief Register a DEM height query callback and parameters.
+  /// After T_GW is fixed, the callback will be called for every new keyframe
+  /// to add a 1-DOF height constraint derived from the terrain model.
+  /// \param callback   Function double(lat, lon) returning DEM height [m], or -1 if invalid.
+  /// \param sigma_h    Height uncertainty (1-sigma) [m].
+  /// \param d_above_ground  Sensor height above ground [m].
+  /// \param r_SA       Sensor offset in IMU frame (same as GPS antenna offset).
+  void setDemCallback(std::function<double(double, double)> callback,
+                      double sigma_h = 2.0,
+                      double d_above_ground = 0.0,
+                      const Eigen::Vector3d& r_SA = Eigen::Vector3d::Zero(),
+                      bool use_dem_height_for_gps = false,
+                      double dem_fusion_alpha = 0.0) {
+    demCallback_ = callback;
+    demSigmaH_ = sigma_h;
+    demDAboveGround_ = d_above_ground;
+    demR_SA_ = r_SA;
+    demUseDemHeightForGps_ = use_dem_height_for_gps;
+    demFusionAlpha_ = dem_fusion_alpha;
+  }
+
   /// \brief Add GPS constraints on all Graph members
   /// \param gpsMeasurementDeque Queue containing a sequence of GPS measurements
   /// \param imuMeasurementDeque Queue containing a sequence of IMU measurements
@@ -647,6 +669,26 @@ class ViSlamBackend //: public VioBackendInterface
 
   /// \brief Add a GPS alignment ("GPS loop closure") frame (after successful attempt).
   void addGpsAlignmentFrame(StateId gpsLossFrameId);
+
+  /// \brief Check if GPS extrinsics (T_GW) are observable (initialised).
+  /// \return True if GPS system is fully initialised and observable.
+  bool isGpsObservable() const { return gpsObservability_; }
+
+  /// \brief Force-initialise GPS with T_GW = identity (world frame == GPS cartesian frame).
+  /// Use this when there is no real GPS receiver but you want to inject synthetic
+  /// cartesian measurements in the world frame.
+  void initGpsWithIdentity();
+
+  /// \brief Add visual-stationary constraints to suppress drift while the camera is stopped.
+  /// The priors are removed automatically when the involved states are marginalised.
+  /// \param id               State to constrain.
+  /// \param referenceId      Stationary anchor state for the no-motion relative pose constraint.
+  /// \param sigmaV           Velocity 1-sigma [m/s].
+  /// \param sigmaPosition    Relative position 1-sigma [m].
+  /// \param sigmaOrientation Relative orientation 1-sigma [rad].
+  /// \return True on success.
+  bool addStationaryConstraint(StateId id, StateId referenceId, double sigmaV,
+                               double sigmaPosition, double sigmaOrientation);
 
   /// \brief             Add Alignment constraints from submapping interface
   /// @param frame_A_id  ID of frame {A}
@@ -771,6 +813,15 @@ private:
       bool reInitFlag;
   };
   AlignedVector<AddGpsBacklog> addGpsBacklog_;
+
+  // dem stuff
+  std::function<double(double, double)> demCallback_; ///< DEM query: (lat, lon) -> height [m].
+  double demSigmaH_ = 2.0;                            ///< DEM height uncertainty [m].
+  double demDAboveGround_ = 0.0;                      ///< Sensor height above ground [m].
+  Eigen::Vector3d demR_SA_ = Eigen::Vector3d::Zero(); ///< Sensor offset in IMU frame.
+  bool demUseDemHeightForGps_ = false;                ///< Fuse GPS altitude with DEM height.
+  double demFusionAlpha_ = 0.0;                       ///< GPS weight in altitude fusion (0=DEM, 1=GPS).
+  StateId lastDemStateId_;                            ///< Last state for which DEM was added.
 
   // Backlog for Submap Alignment Constraints
   struct AddSubmapAlignmentBacklog{

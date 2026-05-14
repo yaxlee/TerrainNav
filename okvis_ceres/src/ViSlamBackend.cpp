@@ -55,10 +55,89 @@ int ViSlamBackend::addGps(const GpsParameters &gpsParameters)
   return realtimeGraph_.addGps(gpsParameters);
 }
 
+void ViSlamBackend::initGpsWithIdentity()
+{
+  kinematics::Transformation T_GW_identity;  // default-constructed = identity
+  realtimeGraph_.setGpsExtrinsics(T_GW_identity);
+  fullGraph_.setGpsExtrinsics(T_GW_identity);
+  realtimeGraph_.setGpsStatus(gpsStatus::Initialised);
+  fullGraph_.setGpsStatus(gpsStatus::Initialised);
+  // Explicitly clear the initial-alignment flag so tryGpsAlignment() does NOT
+  // call addGpsAlignmentFrame() (which would create a long-range GPS loop closure).
+  realtimeGraph_.needsInitialAlignment_ = false;
+  fullGraph_.needsInitialAlignment_ = false;
+  gpsObservability_ = true;
+}
+
+bool ViSlamBackend::addStationaryConstraint(StateId id, StateId referenceId,
+                                            double sigmaV, double sigmaPosition,
+                                            double sigmaOrientation)
+{
+  // Add/update only on the realtime graph; these are local soft constraints and will
+  // naturally disappear as the involved states leave the realtime window.
+  bool success = realtimeGraph_.addStationaryVelocityPrior(id, sigmaV);
+  if (!referenceId.isInitialised() || referenceId == id ||
+      !realtimeGraph_.findStateId(referenceId) || !realtimeGraph_.findStateId(id)) {
+    return success;
+  }
+
+  ViGraph::State& referenceState = realtimeGraph_.states_.at(referenceId);
+  if (referenceState.relativePoseLinks.count(id)) {
+    return success;
+  }
+
+  const double safeSigmaPosition = std::max(1e-6, sigmaPosition);
+  const double safeSigmaOrientation = std::max(1e-6, sigmaOrientation);
+  Eigen::Matrix<double, 6, 6> information;
+  information.setZero();
+  information.topLeftCorner<3, 3>() =
+      Eigen::Matrix3d::Identity() / (safeSigmaPosition * safeSigmaPosition);
+  information.bottomRightCorner<3, 3>() =
+      Eigen::Matrix3d::Identity() / (safeSigmaOrientation * safeSigmaOrientation);
+  success &= realtimeGraph_.addRelativePoseConstraint(
+      referenceId, id, kinematics::Transformation::Identity(), information);
+  return success;
+}
+
 bool ViSlamBackend::addGpsMeasurementsOnAllGraphs(GpsMeasurementDeque& inputgpsMeasurementDeque, ImuMeasurementDeque& imuMeasurementDeque){
   if(realtimeGraph_.gpsParametersVec_.empty()) {
     return false;
   }
+  // When use_dem_height_for_gps=false: blend GPS and DEM altitude in the backend before
+  // adding to the optimizer. This keeps raw GPS altitude at the reader level and lets
+  // the backend do a weighted fusion (alpha=0: full DEM, alpha=1: full GPS).
+  // When use_dem_height_for_gps=true: the reader already replaced GPS alt with DEM alt
+  // (and set vErr=sigma_h), so no further modification is needed here.
+  if (demCallback_ &&
+      !demUseDemHeightForGps_ &&
+      (realtimeGraph_.gpsParametersVec_.back().type == "geodetic" ||
+       realtimeGraph_.gpsParametersVec_.back().type == "geodetic-leica")) {
+    const double alpha = demFusionAlpha_;
+    int dem_fused = 0, dem_invalid = 0;
+    for (auto& meas : inputgpsMeasurementDeque) {
+      const double h_dem = demCallback_(meas.measurement.latitude, meas.measurement.longitdue);
+      if (h_dem >= -100.0) {  // valid DEM tile
+        const double h_gps = meas.measurement.height;
+        const double sigma_gps = std::sqrt(meas.measurement.covariances(2, 2));
+        // Weighted fusion: h_fused = alpha*h_gps + (1-alpha)*h_dem
+        meas.measurement.height = alpha * h_gps + (1.0 - alpha) * h_dem;
+        // Combined uncertainty
+        const double sigma_fused = std::sqrt(
+            alpha * alpha * sigma_gps * sigma_gps +
+            (1.0 - alpha) * (1.0 - alpha) * demSigmaH_ * demSigmaH_);
+        meas.measurement.covariances(2, 2) = sigma_fused * sigma_fused;
+        ++dem_fused;
+      } else {
+        ++dem_invalid;
+      }
+    }
+    if (dem_fused > 0 || dem_invalid > 0)
+      LOG(INFO) << "[DEM-GPS] Backend fusion (alpha=" << alpha << ") for "
+                << dem_fused << "/" << inputgpsMeasurementDeque.size()
+                << " measurements (sigma_dem=" << demSigmaH_ << " m)"
+                << (dem_invalid > 0 ? ", " + std::to_string(dem_invalid) + " outside DEM tile" : "");
+  }
+
   //  Check for valid GPS Measurements
   GpsMeasurementDeque gpsMeasurementDeque;
   if(realtimeGraph_.gpsParametersVec_.back().robustGpsInit){
@@ -143,7 +222,49 @@ bool ViSlamBackend::tryGpsAlignment(){
 
   if(needFullAlign){
 
+    // Skip GPS LC if the T_GW correction is negligible — avoids spurious trajectory jumps
+    // caused by state marginalisation triggering needsGpsReInit() during long stationary periods
+    // when GPS position has barely changed.
+    {
+      const okvis::kinematics::Transformation T_GW_old = realtimeGraph_.T_GW(gpsDropId);
+      const okvis::kinematics::Transformation T_Wold_Wnew = T_GW_old.inverse() * T_GW_new;
+      const double translationCorrection = T_Wold_Wnew.r().norm();
+      const double rotationCorrection    = 2.0 * std::acos(std::min(1.0, std::abs(T_Wold_Wnew.q().w())));
+      static constexpr double kMinTranslation = 0.5; // [m]  below this, skip LC
+      static constexpr double kMinRotation    = 0.5 * M_PI / 180.0; // [rad] 0.5 deg
+      if(translationCorrection < kMinTranslation && rotationCorrection < kMinRotation) {
+        LOG(INFO) << "[GPS] Skipping full GPS LC: correction too small ("
+                  << translationCorrection << " m, " << rotationCorrection * 180.0 / M_PI << " deg)";
+        realtimeGraph_.resetFullGpsAlignment();
+        fullGraph_.resetFullGpsAlignment();
+        return false;
+      }
+      const double maxCorrection = realtimeGraph_.gpsParametersVec_.back().gpsMaxCorrection;
+      if(translationCorrection > maxCorrection) {
+        LOG(WARNING) << "[GPS] Rejecting full GPS LC: correction too large ("
+                     << translationCorrection << " m > " << maxCorrection
+                     << " m), likely bad re-init estimate";
+        realtimeGraph_.removeReInitGpsFactors();
+        fullGraph_.removeReInitGpsFactors();
+        realtimeGraph_.resetFullGpsAlignment();
+        fullGraph_.resetFullGpsAlignment();
+        return false;
+      }
+    }
+
     attemptFullGpsAlignment(gpsDropId,alignId, T_GW_new);
+
+    // Clear stale DEM factors before GPS loop-closure optimization.
+    // DEM factors are height priors computed from current pose positions via T_GW.
+    // The realtime poses are still at pre-correction positions here; GPS factors
+    // will move poses ~30m during the 50-iter call below, but DEM factors computed
+    // at the old (wrong) positions impose wrong height constraints and diverge.
+    // After synchroniseRealtimeAndFullGraph, the next normal optimiseRealtimeGraph
+    // will recompute DEM factors at the corrected positions.
+    if(demCallback_) {
+      realtimeGraph_.clearAllDemFactors();
+      LOG(INFO) << "[DEM] Cleared stale DEM factors before GPS loop-closure optimization.";
+    }
 
     // Do brief realtime optimisation and synchronisation
     //TimerSwitchable gpsLoopOptimizeTimer("99 Initial GPS Loop Optimizer");
@@ -872,6 +993,44 @@ void ViSlamBackend::optimiseRealtimeGraph(
   }
 
 
+
+  // DEM height constraints: refresh every cycle based on current pose estimates.
+  // Guard with isLoopClosing_/isLoopClosureAvailable_: during GPS loop closure T_GW has
+  // already jumped but W-frame poses haven't been corrected yet, so p_G = T_GW_new * p_W_old
+  // lands at the wrong geographic location → wrong h_dem and wrong h_est → divergence.
+  // Skip DEM updates until synchroniseRealtimeAndFullGraph restores pose consistency.
+  if(demCallback_ && realtimeGraph_.isGpsFixed()
+     && !isLoopClosing_ && !isLoopClosureAvailable_) {
+    realtimeGraph_.clearAllDemFactors();
+    for(auto& stateKv : realtimeGraph_.states_) {
+      auto& state = stateKv.second;
+      if(state.pose->fixed()) continue;  // frozen state, skip
+
+      // Compute position in G frame using current estimate
+      const Eigen::Vector3d r_WS = state.pose->estimate().r();
+      const Eigen::Matrix3d C_WS = state.pose->estimate().C();
+      const Eigen::Vector3d p_G = realtimeGraph_.T_GW().C() * (r_WS + C_WS * demR_SA_)
+                                  + realtimeGraph_.T_GW().r();
+
+      // Convert to geodetic to query DEM
+      double lat, lon, h_est;
+      realtimeGraph_.globCartesianFrame_.Reverse(p_G.x(), p_G.y(), p_G.z(), lat, lon, h_est);
+
+      const double h_dem = demCallback_(lat, lon);
+      if(h_dem < -100.0) continue;  // invalid DEM value (outside raster)
+
+      const double h_sensor = h_dem + demDAboveGround_;
+      const double h_residual = h_sensor - h_est;
+      static int demLogCount = 0;
+      if(demLogCount < 10 || std::abs(h_residual) > 5.0) {
+        LOG(INFO) << "[DEM factor] state=" << stateKv.first.value()
+                  << " h_dem=" << h_dem << " h_est=" << h_est
+                  << " h_sensor=" << h_sensor << " residual=" << h_residual << "m";
+        ++demLogCount;
+      }
+      realtimeGraph_.addDemHeightMeasurement(stateKv.first, h_sensor, demSigmaH_, demR_SA_);
+    }
+  }
 
   // run the optimiser
   realtimeGraph_.options_.linear_solver_type = ::ceres::DENSE_SCHUR;
@@ -2644,16 +2803,20 @@ bool ViSlamBackend::attemptFullGpsAlignment(StateId pose_i , StateId pose_j, con
     const kinematics::Transformation T_Wnew_Wold = T_WS_set * T_WSk_old.inverse(); /// XXX: this now uses the wrong namings but should do the correct thing
     SpeedAndBias speedAndBias = iter->second.speedAndBias->estimate();
     speedAndBias.head<3>() = (T_Wnew_Wold.C() * speedAndBias.head<3>()).eval();
-    realtimeGraph_.setPose(iter->first, T_WS_set);
+    // Warm-start the full graph only — do NOT touch the realtime graph.
+    // The GPS loop-closure factors are added to the realtime graph later (via addGpsAlignmentFrame
+    // backlog). Until then, the realtime optimizer has no GPS constraint to justify this warp, so
+    // the old marginalization priors fight it and leave poses/landmarks in an inconsistent
+    // intermediate state, causing reprojection errors and tracking loss in subsequent frames.
+    // The full graph optimizer computes the correct result; synchroniseRealtimeAndFullGraph imports
+    // it atomically once done.
     fullGraph_.setPose(iter->first, T_WS_set);
-    realtimeGraph_.setSpeedAndBias(iter->first, speedAndBias);
     fullGraph_.setSpeedAndBias(iter->first, speedAndBias);
   }
 
-  /// update landmarks
+  /// update landmarks in full graph only (same rationale as poses above)
   for(auto iter = realtimeGraph_.landmarks_.begin(); iter != realtimeGraph_.landmarks_.end(); ++iter) {
     Eigen::Vector4d hPointNew = T_Wold_Wnew_final * iter->second.hPoint->estimate();
-    realtimeGraph_.setLandmark(iter->first, hPointNew, iter->second.hPoint->initialized());
     fullGraph_.setLandmark(iter->first, hPointNew, iter->second.hPoint->initialized());
   }
 

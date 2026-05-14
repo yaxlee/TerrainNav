@@ -78,6 +78,7 @@ void ThreadedSlam::init()
   frontend_.setBriskMatchingThreshold(parameters_.frontend.matching_threshold);
   frontend_.setBriskDetectionMaximumKeypoints(size_t(parameters_.frontend.max_num_keypoints));
   frontend_.setKeyframeInsertionOverlapThreshold(float(parameters_.frontend.keyframe_overlap));
+  frontend_.setDetectionMaskRects(parameters_.frontend.mask_rects);
 
   // setup estimator
   estimator_.addImu(parameters_.imu);
@@ -409,6 +410,127 @@ bool ThreadedSlam::addSubmapAlignmentConstraints(const SupereightMapType* submap
           AlignmentTerm(submap_A_ptr, submap_B_ptr,frame_A_id,frame_B_id, pointCloud, sensorError));
 
   return true;
+}
+
+ThreadedSlam::VisualMotionStats ThreadedSlam::computeVisualMotionStats(
+    const okvis::MultiFramePtr& multiFrame,
+    VisualObservationMap* currentObservations) const
+{
+  currentObservations->clear();
+  std::vector<double> displacements;
+
+  for (size_t im = 0; im < multiFrame->numFrames(); ++im) {
+    const size_t numKeypoints = multiFrame->numKeypoints(im);
+    for (size_t k = 0; k < numKeypoints; ++k) {
+      const uint64_t rawLandmarkId = multiFrame->landmarkId(im, k);
+      if (rawLandmarkId == 0) {
+        continue;
+      }
+
+      const LandmarkId landmarkId(rawLandmarkId);
+      if (!estimator_.isLandmarkAdded(landmarkId) ||
+          !estimator_.isLandmarkInitialised(landmarkId)) {
+        continue;
+      }
+
+      Eigen::Vector2d keypoint;
+      if (!multiFrame->getKeypoint(im, k, keypoint)) {
+        continue;
+      }
+
+      const VisualObservationKey key(im, rawLandmarkId);
+      currentObservations->insert({key, keypoint});
+      auto previous = previousVisualObservations_.find(key);
+      if (previous != previousVisualObservations_.end()) {
+        displacements.push_back((keypoint - previous->second).norm());
+      }
+    }
+  }
+
+  VisualMotionStats stats;
+  stats.numMatches = static_cast<int>(displacements.size());
+  if (stats.numMatches < parameters_.stationary.min_landmarks) {
+    return stats;
+  }
+
+  double sum = 0.0;
+  for (double displacement : displacements) {
+    sum += displacement;
+  }
+  std::sort(displacements.begin(), displacements.end());
+  stats.meanPixelDisplacement = sum / static_cast<double>(displacements.size());
+  const size_t mid = displacements.size() / 2;
+  stats.medianPixelDisplacement =
+      (displacements.size() % 2 == 0)
+          ? 0.5 * (displacements[mid - 1] + displacements[mid])
+          : displacements[mid];
+  stats.valid = true;
+  return stats;
+}
+
+void ThreadedSlam::updateVisualStationarity(const okvis::MultiFramePtr& multiFrame)
+{
+  if (!parameters_.stationary.enabled) {
+    previousVisualObservations_.clear();
+    visualStationaryActive_ = false;
+    visualStationaryEntryCount_ = 0;
+    visualStationaryExitCount_ = 0;
+    visualStationaryAnchorId_ = StateId();
+    return;
+  }
+
+  VisualObservationMap currentObservations;
+  const VisualMotionStats stats =
+      computeVisualMotionStats(multiFrame, &currentObservations);
+  const bool visuallyStationary =
+      stats.valid &&
+      stats.medianPixelDisplacement <= parameters_.stationary.max_median_pixel_displacement &&
+      stats.meanPixelDisplacement <= parameters_.stationary.max_mean_pixel_displacement;
+
+  if (visuallyStationary) {
+    ++visualStationaryEntryCount_;
+    visualStationaryExitCount_ = 0;
+  } else {
+    visualStationaryEntryCount_ = 0;
+    if (visualStationaryActive_) {
+      ++visualStationaryExitCount_;
+    }
+  }
+
+  const int entryFrames = std::max(1, parameters_.stationary.entry_frames);
+  const int exitFrames = std::max(1, parameters_.stationary.exit_frames);
+  const StateId currentId(multiFrame->id());
+
+  if (!visualStationaryActive_ && visualStationaryEntryCount_ >= entryFrames) {
+    visualStationaryActive_ = true;
+    visualStationaryExitCount_ = 0;
+    visualStationaryAnchorId_ = currentId;
+    LOG(INFO) << "Visual stationary: entered at state " << currentId.value()
+              << " using " << stats.numMatches << " repeated 3D landmarks"
+              << ", median pixel motion=" << stats.medianPixelDisplacement
+              << ", mean pixel motion=" << stats.meanPixelDisplacement;
+  }
+
+  if (visualStationaryActive_ && visualStationaryExitCount_ >= exitFrames) {
+    LOG(INFO) << "Visual stationary: exited at state " << currentId.value();
+    visualStationaryActive_ = false;
+    visualStationaryEntryCount_ = 0;
+    visualStationaryExitCount_ = 0;
+    visualStationaryAnchorId_ = StateId();
+  }
+
+  if (visualStationaryActive_ && visuallyStationary) {
+    if (!visualStationaryAnchorId_.isInitialised() ||
+        !estimator_.isInImuWindow(visualStationaryAnchorId_)) {
+      visualStationaryAnchorId_ = currentId;
+    }
+    estimator_.addStationaryConstraint(
+        currentId, visualStationaryAnchorId_, parameters_.stationary.sigma_v,
+        parameters_.stationary.sigma_position,
+        parameters_.stationary.sigma_orientation);
+  }
+
+  previousVisualObservations_.swap(currentObservations);
 }
 
 // Set the blocking variable that indicates whether the addMeasurement() functions
@@ -829,6 +951,7 @@ bool ThreadedSlam::processFrame() {
   estimator_.setKeyframe(StateId(multiFrame->id()), asKeyframe);
   matchTimer.stop();
 
+  updateVisualStationarity(multiFrame);
   // Add GPS Measurements
   estimator_.addGpsMeasurementsOnAllGraphs(gpsMeasurementDeque_, imuMeasurementDeque_);
 

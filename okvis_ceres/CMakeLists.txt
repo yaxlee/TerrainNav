@@ -41,6 +41,8 @@ add_library(${LIB_NAME}
   include/okvis/ceres/DepthError.hpp
   src/CeresIterationCallback.cpp
   src/ErrorInterface.cpp
+  include/okvis/ceres/DemHeightError.hpp
+  src/DemHeightError.cpp
   src/GpsErrorAsynchronous.cpp
   src/GpsErrorSynchronous.cpp
   src/HomogeneousPointError.cpp

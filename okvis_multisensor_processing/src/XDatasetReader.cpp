@@ -16,6 +16,8 @@
  * @author Simon Boche
  */
 
+#include <sstream>
+
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -34,6 +36,19 @@ XDatasetReader::XDatasetReader(const std::string & path,
     gpsDataType_ = (*parameters.gps).type;
     OKVIS_ASSERT_TRUE(Exception, gpsDataType_=="cartesian" || gpsDataType_=="geodetic" || gpsDataType_=="geodetic-leica",
                       "Unknown GPS data type specified")
+    maxHErr_ = (*parameters.gps).maxHErr;
+    maxVErr_ = (*parameters.gps).maxVErr;
+    minFixStatus_ = (*parameters.gps).minFixStatus;
+    const std::string& geoidModel = (*parameters.gps).geoidModel;
+    if (!geoidModel.empty()) {
+      try {
+        geoid_ = std::make_unique<GeographicLib::Geoid>(geoidModel);
+        LOG(INFO) << "[GPS] Geoid model loaded: " << geoidModel;
+      } catch (const std::exception& e) {
+        LOG(WARNING) << "[GPS] Failed to load geoid model '" << geoidModel << "': " << e.what()
+                     << " -- geoid undulation correction disabled.";
+      }
+    }
   }
   else {
     gpsFlag_ = false;
@@ -463,6 +478,16 @@ void  XDatasetReader::processing() {
             std::getline(gstream, gs, ',');
             uint64_t gnanoseconds = std::stol(gs.c_str()) - GNSS_LEAP_NANOSECONDS;
 
+            // Filter burst-duplicate measurements (GPS receiver outputs stale buffered
+            // fixes after a dropout gap, all within a few ms with impossible velocities).
+            static constexpr uint64_t kMinGpsIntervalNs = 100000000ULL; // 0.1s
+            if (lastGpsNs_ > 0 && gnanoseconds - lastGpsNs_ < kMinGpsIntervalNs) {
+              LOG(WARNING) << "[GPS filter] Burst duplicate dropped: dt="
+                           << (gnanoseconds - lastGpsNs_) / 1e6 << "ms < 100ms";
+              t_gps_.fromNSec(gnanoseconds);
+              continue;
+            }
+
             Eigen::Vector3d pos;
             for (int j = 0; j < 3; ++j) {
               std::getline(gstream, gs, ',');
@@ -475,6 +500,7 @@ void  XDatasetReader::processing() {
               err[j] = std::stof(gs);
             }
 
+            lastGpsNs_ = gnanoseconds;
             t_gps_.fromNSec(gnanoseconds);
 
             // add the GPS measurement for (blocking) processing
@@ -508,6 +534,54 @@ void  XDatasetReader::processing() {
             // 6th vertical error
             std::getline(gstream, gs, ',');
             double vErr = std::stod(gs.c_str());
+
+            // 7th-12th: vx, vy, vz, vel_dt, cov_type, fix_status (optional extra columns)
+            // Read remaining line and parse fix_status only if it exists.
+            std::string remaining;
+            std::getline(gstream, remaining);
+            if (!remaining.empty() && remaining.back() == '\r') remaining.pop_back();
+
+            int fixStatus = -1; // -1 = unknown (CSV has no extra columns)
+            if (!remaining.empty()) {
+              // Count commas to find fix_status position (5 skips + 1 value)
+              std::istringstream rem(remaining);
+              std::string col;
+              int colIdx = 0;
+              while (std::getline(rem, col, ',')) {
+                if (colIdx == 5) { // 6th extra column = fix_status
+                  if (!col.empty() && col.back() == '\r') col.pop_back();
+                  if (!col.empty()) fixStatus = std::stoi(col);
+                  break;
+                }
+                ++colIdx;
+              }
+            }
+
+            // filter by fix_status (only when column is present)
+            if (fixStatus >= 0 && minFixStatus_ > 0 && fixStatus < minFixStatus_) {
+              LOG(WARNING) << "[GPS filter] fix_status=" << fixStatus << " < min=" << minFixStatus_
+                           << " t=" << gnanoseconds;
+              continue;
+            }
+
+            // skip measurements with zero hErr (invalid covariance)
+            if (hErr == 0.0) {
+              LOG(WARNING) << "[GPS filter] hErr=0 (invalid covariance) t=" << gnanoseconds;
+              continue;
+            }
+
+            // filter bad GPS points by error thresholds
+            if (hErr > maxHErr_ || vErr > maxVErr_) {
+              LOG(WARNING) << "[GPS filter] hErr=" << hErr << " vErr=" << vErr
+                           << " exceeds max (hErr_max=" << maxHErr_ << " vErr_max=" << maxVErr_
+                           << ") t=" << gnanoseconds;
+              continue;
+            }
+
+            // apply geoid undulation correction: convert ellipsoidal -> orthometric height
+            if (geoid_) {
+              alt -= (*geoid_)(lat, lon);
+            }
 
             t_gps_.fromNSec(gnanoseconds);
 
@@ -555,6 +629,19 @@ void  XDatasetReader::processing() {
             // 12th vertical error
             std::getline(gstream, gs, ',');
             double vErr = std::stod(gs.c_str());
+
+            // filter bad GPS points by error thresholds
+            if (hErr > maxHErr_ || vErr > maxVErr_) {
+              LOG(WARNING) << "[GPS filter] hErr=" << hErr << " vErr=" << vErr
+                           << " exceeds max (hErr_max=" << maxHErr_ << " vErr_max=" << maxVErr_
+                           << ") t=" << gnanoseconds;
+              continue;
+            }
+
+            // apply geoid undulation correction: convert ellipsoidal -> orthometric height
+            if (geoid_) {
+              alt -= (*geoid_)(lat, lon);
+            }
 
             t_gps_.fromNSec(gnanoseconds);
 

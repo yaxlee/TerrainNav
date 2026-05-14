@@ -5,7 +5,7 @@
 general:
   # outputs
   results_directory:          "/home/"
-  write_mesh_output: true
+  write_mesh_output: false
 
   # Sensor processing
   sensor_measurement_downsampling: 2
@@ -19,8 +19,8 @@ general:
   far_plane: 10.0 # stereo baseline is 0.5m
 
   # Alignment settings
-  use_map_to_map_factors: true
-  use_map_to_live_factors: true
+  use_map_to_map_factors: false
+  use_map_to_live_factors: false
   n_factors_per_state: 200 # number of points per depth images
   sensor_error: 0.4 # 1-sigma for obsv. noise [m]
 

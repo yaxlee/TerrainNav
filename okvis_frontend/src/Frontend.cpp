@@ -243,8 +243,35 @@ bool Frontend::detectAndDescribe(size_t cameraIndex, std::shared_ptr<okvis::Mult
   frameOut->setNetwork(cameraIndex, networks_[cameraIndex]);
 #endif
 
-  // detect
+  static bool maskLogged = false;
+  if(!maskLogged) {
+    LOG(INFO) << "MASK: " << detectionMaskRects_.size() << " exclusion rect(s) configured.";
+    for(const cv::Rect& r : detectionMaskRects_)
+      LOG(INFO) << "  rect [" << r.x << ", " << r.y << ", " << r.width << ", " << r.height << "]";
+    maskLogged = true;
+  }
+
+  // detect (BRISK does not support detector-level masks; filtering is done below)
   frameOut->detect(cameraIndex);
+
+  // Post-detection filter: remove keypoints inside excluded regions.
+  if(!detectionMaskRects_.empty()) {
+    const cv::Size imgSize = frameOut->image(cameraIndex).size();
+    const cv::Rect imgBounds(0, 0, imgSize.width, imgSize.height);
+    std::vector<cv::KeyPoint> kept;
+    const size_t n = frameOut->numKeypoints(cameraIndex);
+    kept.reserve(n);
+    for(size_t k = 0; k < n; ++k) {
+      cv::KeyPoint kp;
+      frameOut->getCvKeypoint(cameraIndex, k, kp);
+      bool excluded = false;
+      for(const cv::Rect& r : detectionMaskRects_) {
+        if((r & imgBounds).contains(kp.pt)) { excluded = true; break; }
+      }
+      if(!excluded) kept.push_back(kp);
+    }
+    frameOut->resetKeypoints(cameraIndex, kept);
+  }
 
   // extract
   frameOut->describe(cameraIndex);

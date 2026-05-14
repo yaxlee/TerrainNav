@@ -5,6 +5,8 @@ find_package(Eigen3 REQUIRED)
 find_package(Glog REQUIRED)
 find_package(OpenCV REQUIRED core imgcodecs imgproc highgui calib3d)
 find_package(PCL REQUIRED)
+find_package(GDAL REQUIRED)
+find_package(GeographicLib REQUIRED)
 
 # Generate the configured header file
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/okvisConfig.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/include/okvis/okvisConfig.hpp" @ONLY)
@@ -40,9 +42,13 @@ target_include_directories(${LIB_NAME}
     $<INSTALL_INTERFACE:include>
     ${GLOG_INCLUDE_DIRS}
     ${PCL_INCLUDE_DIRS}
+    ${GDAL_INCLUDE_DIRS}
+    ${GeographicLib_INCLUDE_DIRS}
 )
 target_link_libraries(${LIB_NAME}
+  ${GDAL_LIBRARIES}
   ${GLOG_LIBRARIES}
+  ${GeographicLib_LIBRARIES}
   ${OpenCV_LIBS}
   Boost::filesystem
   Eigen3::Eigen

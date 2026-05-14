@@ -58,6 +58,7 @@
 #include <okvis/ceres/DepthError.hpp>
 #include <okvis/ceres/CeresIterationCallback.hpp>
 #include <okvis/ceres/GpsErrorAsynchronous.hpp>
+#include <okvis/ceres/DemHeightError.hpp>
 #include <okvis/ceres/SubmapIcpError.hpp>
 
 #include <GeographicLib/Geocentric.hpp>
@@ -449,6 +450,26 @@ class ViGraph
   /// \param gpsMeasurements[output] Fill with measurements
   void gpsMeasurements(StateId stateId, AlignedVector<Eigen::Vector3d>& gpsMeasurements);
 
+  /// \brief Add a DEM height constraint to an existing state.
+  /// \param poseId  The state ID to constrain.
+  /// \param h_dem   Height from DEM at the (lat, lon) of this state [m].
+  /// \param sigma_h Height uncertainty (1-sigma) [m].
+  /// \param r_SA    Sensor-to-body offset in IMU frame.
+  /// \return True on success.
+  bool addDemHeightMeasurement(StateId poseId, double h_dem,
+                               double sigma_h, const Eigen::Vector3d& r_SA);
+
+  /// \brief Remove all DEM height factors from the Ceres problem and clear them from all states.
+  void clearAllDemFactors();
+
+  /// \brief Try to bootstrap T_GW from the first two GPS points (fast initialization).
+  /// Requires at least 2 states in gpsStates_ and a horizontal separation > minDist.
+  /// \param[out] T_GW_bootstrap The bootstrapped estimate.
+  /// \param minDist Minimum horizontal distance [m] required.
+  /// \return True if bootstrap succeeded.
+  bool bootstrapTGWFromTwoPoints(kinematics::Transformation& T_GW_bootstrap,
+                                 double minDist = 3.0);
+
   /// \brief Freeze External GPS Trafo (T_GW)
   void freezeGpsExtrinsics();
 
@@ -464,6 +485,12 @@ class ViGraph
   /// \brief Check if stateID exists in graph
   /// \return True if state with id exists. False otherwise
   bool findStateId(StateId sid){ return states_.count(sid);}
+
+  /// \brief Add (or update) a stationary velocity prior on a state.
+  /// \param stateId State to constrain.
+  /// \param sigmaV  Velocity 1-sigma [m/s].
+  /// \return True on success.
+  bool addStationaryVelocityPrior(StateId stateId, double sigmaV);
 
   /// \brief Check Status of GPS observability
   /// \return True if GPS Trafo is observable.
@@ -502,6 +529,10 @@ class ViGraph
 
   /// \brief reset after full alignment
   void resetFullGpsAlignment();
+  /// \brief Remove GPS factors added during ReInitialising from the Ceres problem.
+  /// Call this when rejecting a bad GPS loop closure to prevent stale high-residual
+  /// factors from polluting subsequent optimisation.
+  void removeReInitGpsFactors();
   /// \brief reset after position alignment
   void resetPosGpsAlignment();
   /// \brief reset after initial alignment
@@ -775,8 +806,11 @@ protected:
   /// \brief Relative pose graph edge.
   using RelativePoseLink = TwoStateGraphEdge<ceres::RelativePoseError>;
 
-  /// \brief GPS factpr pose graph edge.
+  /// \brief GPS factor pose graph edge.
   using GpsFactor = GraphEdge<ceres::GpsErrorAsynchronous>;
+
+  /// \brief DEM height factor (1-DOF height constraint).
+  using DemFactor = GraphEdge<ceres::DemHeightError>;
 
   /// \brief
   using SubmapAlignmentFactor = GraphEdge<ceres::SubmapIcpError>;
@@ -799,11 +833,13 @@ protected:
     std::vector<ExtrinsicsLink> previousExtrinsicsLink; ///< Link to previous extrinsics.
     PosePrior posePrior; ///< Pose prior.
     SpeedAndBiasPrior speedAndBiasPrior; ///< Speed/bias prior.
+    SpeedAndBiasPrior stationaryVelocityPrior; ///< Stationary zero-velocity prior.
     std::vector<ExtrinsicsPrior> extrinsicsPriors; ///< Extrinsics prior.
     std::map<StateId, TwoPoseLink> twoPoseLinks; ///< All pose graph edges.
     std::map<StateId, TwoPoseConstLink> twoPoseConstLinks; ///< All pose graph edges (const).
     std::map<StateId, RelativePoseLink> relativePoseLinks; ///< All relative pose graph edges.
     std::vector<GpsFactor> GpsFactors; ///< All GPS factors
+    std::vector<DemFactor> DemFactors; ///< All DEM height factors
     // ToDo: how to store  submap alignment factors for two states
     std::vector<::ceres::ResidualBlockId> mapResIds;
     std::vector<SubmapAlignmentFactor> submapReferenceLinks;
@@ -845,6 +881,17 @@ protected:
   std::set<StateId> gpsStates_; /// < Set containing IDs of states connected to global position factors
   std::multimap<StateId, GpsMeasurement> gpsInitMap_;
   ImuMeasurementDeque gpsInitImuQueue_; /// < Queue buffering IMU measurements during initialisation
+
+  /// Persistent buffer for GPS initialization: stores (gps_pos_in_G, world_pos_in_W, covariance)
+  /// pairs computed when GPS measurements are first processed. Unlike gpsStates_, this is NOT
+  /// erased on state marginalization, so RANSAC can accumulate enough points across the sliding window.
+  struct GpsInitPointPair {
+    Eigen::Vector3d gpsPos;
+    Eigen::Vector3d worldPos;
+    Eigen::Matrix3d cov;
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  };
+  std::vector<GpsInitPointPair, Eigen::aligned_allocator<GpsInitPointPair>> gpsInitPointBuffer_;
 
   // Re-initialisation and alignment
   bool needsInitialAlignment_ = false; /// < Flag if full alignmemt (orientation + position) should be triggered

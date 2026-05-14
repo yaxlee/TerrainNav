@@ -857,6 +857,10 @@ bool ViGraph::needsGpsReInit(){
     lastGpsStateId = *(gpsStates_.rbegin());
 
     if(gpsStatus_ == gpsStatus::Initialised && states_.at(lastGpsStateId).pose->fixed()){
+        const double elapsed = (states_.rbegin()->second.timestamp
+                                - states_.at(lastGpsStateId).timestamp).toSec();
+        if(elapsed < gpsParametersVec_.back().gpsDropoutThreshold)
+          return false;
         needsPositionAlignment_ = true;
         gpsDropoutId_ = lastGpsStateId;
         return true;
@@ -871,6 +875,12 @@ bool ViGraph::needsGpsReInit(){
 
 void ViGraph::reInitGpsExtrinsics(){
 
+    if(gpsStatus_ != gpsStatus::ReInitialising){
+      // Only clear when first entering ReInitialising (from Initialised).
+      // needsGpsReInit() can fire every iteration while already in ReInitialising,
+      // so we must not clear here again or the buffer never accumulates.
+      gpsInitPointBuffer_.clear();
+    }
     gpsStatus_ = gpsStatus::ReInitialising;
     needsPositionAlignment_ = true;
 }
@@ -966,6 +976,20 @@ void ViGraph::resetFullGpsAlignment(){
     gpsReInitStates_.clear();
 }
 
+void ViGraph::removeReInitGpsFactors(){
+  for(const StateId sid : gpsReInitStates_){
+    if(!states_.count(sid)) continue;
+    State& state = states_.at(sid);
+    for(auto& factor : state.GpsFactors){
+      if(factor.residualBlockId)
+        problem_->RemoveResidualBlock(factor.residualBlockId);
+    }
+    state.GpsFactors.clear();
+    gpsStates_.erase(sid);
+  }
+  LOG(INFO) << "[GPS] Removed re-init GPS factors from " << gpsReInitStates_.size() << " states.";
+}
+
 void ViGraph::resetPosGpsAlignment(){
     needsPositionAlignment_=false;
 }
@@ -993,7 +1017,15 @@ bool ViGraph::addGpsMeasurement(StateId poseId, GpsMeasurement &gpsMeas, const I
       gpsMeas.measurement.setPosition(x, y, z);
     }
 
-    newGpsFactor.errorTerm.reset(new ceres::GpsErrorAsynchronous(gpsMeas.measurement.position, gpsMeas.measurement.covariances.inverse(),
+    // Clamp diagonal covariance to a minimum to guard against zero-accuracy GPS records
+    // (e.g. RTK-fixed solutions reporting hAcc=0 / vAcc=0) which would produce a singular
+    // covariance matrix → NaN information matrix → NaN residuals → Ceres optimizer termination.
+    static constexpr double kMinGpsSigma = 0.01; // 1 cm minimum sigma
+    const double sigmaScale = gpsParametersVec_.back().gpsSigmaScale;
+    Eigen::Matrix3d safeCovariance = gpsMeas.measurement.covariances * (sigmaScale * sigmaScale);
+    for(int i = 0; i < 3; ++i)
+      safeCovariance(i,i) = std::max(safeCovariance(i,i), kMinGpsSigma * kMinGpsSigma);
+    newGpsFactor.errorTerm.reset(new ceres::GpsErrorAsynchronous(gpsMeas.measurement.position, safeCovariance.inverse(),
                                      imuMeasurements, imuParametersVec_.back(),state.timestamp, gpsMeas.timeStamp, gpsParametersVec_.back()));
     if(gpsStatus_ == gpsStatus::Initialising || gpsStatus_ == gpsStatus::Initialised || gpsStatus_ == gpsStatus::ReInitialising) {
       newGpsFactor.residualBlockId = problem_->AddResidualBlock(newGpsFactor.errorTerm.get(), cauchyGpsLossFunctionPtr_.get(),
@@ -1001,8 +1033,121 @@ bool ViGraph::addGpsMeasurement(StateId poseId, GpsMeasurement &gpsMeas, const I
     }
     state.GpsFactors.push_back(newGpsFactor);
 
+    // Populate persistent init buffer for RANSAC-based initialization.
+    // gpsStates_ entries are erased on state marginalization, so RANSAC (which needs ~40 points)
+    // would never accumulate enough. This buffer is NOT erased on marginalization.
+    if(gpsStatus_ == gpsStatus::Off || gpsStatus_ == gpsStatus::Idle
+        || gpsStatus_ == gpsStatus::Initialising || gpsStatus_ == gpsStatus::ReInitialising){
+      okvis::kinematics::Transformation T_WS_prop;
+      newGpsFactor.errorTerm->applyPreInt(state.pose->estimate(), state.speedAndBias->estimate(), T_WS_prop);
+      GpsInitPointPair pair;
+      pair.gpsPos  = gpsMeas.measurement.position; // already in Cartesian
+      pair.worldPos = T_WS_prop.r() + T_WS_prop.C() * gpsParametersVec_.back().r_SA;
+      pair.cov     = safeCovariance;
+      gpsInitPointBuffer_.push_back(pair);
+    }
+
     return true;
 
+}
+
+bool ViGraph::addDemHeightMeasurement(StateId poseId, double h_dem,
+                                      double sigma_h, const Eigen::Vector3d& r_SA) {
+  if(!states_.count(poseId)) {
+    LOG(WARNING) << "[DEM] State " << poseId.value() << " not found.";
+    return false;
+  }
+  if(!gpsFixed_) {
+    LOG(WARNING) << "[DEM] T_GW not yet fixed, skipping DEM factor for state " << poseId.value();
+    return false;
+  }
+
+  State& state = states_.at(poseId);
+  // h_dem is the final expected sensor height (DEM terrain + d_above_ground), pre-computed by caller
+
+  DemFactor newFactor;
+  newFactor.errorTerm = std::make_shared<ceres::DemHeightError>(
+      h_dem, sigma_h, r_SA, T_GW());
+  newFactor.residualBlockId = problem_->AddResidualBlock(
+      newFactor.errorTerm.get(),
+      nullptr,                           // no robust loss for height
+      state.pose->parameters());
+  state.DemFactors.push_back(newFactor);
+
+  return true;
+}
+
+void ViGraph::clearAllDemFactors() {
+  for(auto& stateKv : states_) {
+    for(auto& factor : stateKv.second.DemFactors) {
+      if(factor.residualBlockId) {
+        problem_->RemoveResidualBlock(factor.residualBlockId);
+      }
+    }
+    stateKv.second.DemFactors.clear();
+  }
+}
+
+bool ViGraph::bootstrapTGWFromTwoPoints(kinematics::Transformation& T_GW_bootstrap,
+                                        double minDist) {
+  if(gpsStates_.size() < 2) return false;
+
+  // Collect up to 2 GPS states that have measurements
+  auto it = gpsStates_.begin();
+  StateId sid1 = *it++;
+  StateId sid2 = *it;
+
+  if(!states_.count(sid1) || !states_.count(sid2)) return false;
+  if(states_.at(sid1).GpsFactors.empty() || states_.at(sid2).GpsFactors.empty()) return false;
+
+  // GPS positions in G frame
+  const Eigen::Vector3d gps1_G = states_.at(sid1).GpsFactors.front().errorTerm->measurement();
+  const Eigen::Vector3d gps2_G = states_.at(sid2).GpsFactors.front().errorTerm->measurement();
+
+  // VIO positions in W frame (propagated to GPS time)
+  okvis::kinematics::Transformation T_WS1_prop, T_WS2_prop;
+  const okvis::SpeedAndBias sb1 = states_.at(sid1).speedAndBias->estimate();
+  const okvis::SpeedAndBias sb2 = states_.at(sid2).speedAndBias->estimate();
+  states_.at(sid1).GpsFactors.front().errorTerm->applyPreInt(
+      states_.at(sid1).pose->estimate(), sb1, T_WS1_prop);
+  states_.at(sid2).GpsFactors.front().errorTerm->applyPreInt(
+      states_.at(sid2).pose->estimate(), sb2, T_WS2_prop);
+
+  const Eigen::Vector3d world1_W = T_WS1_prop.r() + T_WS1_prop.C() * gpsParametersVec_.back().r_SA;
+  const Eigen::Vector3d world2_W = T_WS2_prop.r() + T_WS2_prop.C() * gpsParametersVec_.back().r_SA;
+
+  // Check horizontal separation in GPS frame
+  const Eigen::Vector2d gps_h = (gps2_G - gps1_G).head<2>();
+  if(gps_h.norm() < minDist) return false;
+
+  // Estimate yaw: angle of the displacement vector in each frame
+  const double yaw_G = std::atan2(gps_h.y(), gps_h.x());
+  const Eigen::Vector2d world_h = (world2_W - world1_W).head<2>();
+  // Also require VIO to show real movement (guards against GPS noise while stationary)
+  if(world_h.norm() < minDist * 0.3) return false;
+  const double yaw_W = std::atan2(world_h.y(), world_h.x());
+
+  // C_GW: only yaw rotation
+  const double yaw_GW = yaw_G - yaw_W;
+  const Eigen::Matrix3d C_GW =
+      Eigen::AngleAxisd(yaw_GW, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+
+  // r_GW: such that gps1_G = C_GW * world1_W + r_GW
+  const Eigen::Vector3d r_GW = gps1_G - C_GW * world1_W;
+
+  Eigen::Matrix4d T_mat = Eigen::Matrix4d::Identity();
+  T_mat.topLeftCorner<3,3>() = C_GW;
+  T_mat.topRightCorner<3,1>() = r_GW;
+  T_GW_bootstrap.set(T_mat);
+
+  LOG(INFO) << "[GPS] Bootstrapped T_GW from 2 points (separation="
+            << gps_h.norm() << "m, yaw_GW=" << yaw_GW * 180.0 / M_PI << "deg)"
+            << " -- warm start only, GPS factors remain inactive until Umeyama converges.";
+  // Do NOT change gpsStatus_ here: GPS factors must stay inactive (not in Ceres problem)
+  // until checkForGpsInit/initializationStrategy confirm proper convergence.
+  // Changing to Initialising here would activate GPS factors with a potentially noisy
+  // T_GW estimate (e.g. from GPS noise while stationary), causing trajectory drift.
+  return true;
 }
 
 void ViGraph::gpsMeasurements(StateId stateId, AlignedVector<Eigen::Vector3d>& gpsMeasurements){
@@ -1013,32 +1158,65 @@ void ViGraph::gpsMeasurements(StateId stateId, AlignedVector<Eigen::Vector3d>& g
 
 bool ViGraph::checkForGpsInit(okvis::kinematics::Transformation& T_GW, std::set<StateId> consideredStates, double* yaw_error) {
 
-  if(consideredStates.size() < 2)
-    return false;
-
   std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d> > gpsPoints;
   std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> worldPoints;
   std::vector<Eigen::Matrix<double,3,3>, Eigen::aligned_allocator<Eigen::Matrix<double,3,3>> > covariances;
 
-  // Get all measurements so far as well as corresponding propagated poses
-  // Iterate over all occuring states with gps measurements
-  auto gpsStateIter = consideredStates.begin();
-  if(consideredStates.size() > 100 && gpsParametersVec_.back().robustGpsInit){
-    gpsStateIter = std::prev(consideredStates.end(), 100);
+  if(gpsParametersVec_.back().robustGpsInit){
+    // Use the persistent buffer that survives state marginalization.
+    // gpsStates_/gpsReInitStates_ only hold active sliding-window states (~1-2 entries after
+    // marginalization), which is not enough for any alignment. gpsInitPointBuffer_ accumulates
+    // across time without being erased. For initial init the buffer is cleared on Initialised;
+    // for ReInit the buffer is cleared by reInitGpsExtrinsics() and re-accumulated fresh.
+    size_t startIdx = 0;
+    if(gpsInitPointBuffer_.size() > 100)
+      startIdx = gpsInitPointBuffer_.size() - 100;
+    for(size_t i = startIdx; i < gpsInitPointBuffer_.size(); ++i){
+      gpsPoints.push_back(gpsInitPointBuffer_[i].gpsPos);
+      worldPoints.push_back(gpsInitPointBuffer_[i].worldPos);
+      covariances.push_back(gpsInitPointBuffer_[i].cov);
+    }
+    LOG(INFO) << "[GPS Init] Using persistent buffer: " << gpsPoints.size() << " points (buffer total: " << gpsInitPointBuffer_.size() << ")";
+  } else {
+    if(consideredStates.size() < 2){
+      LOG(INFO) << "[GPS Init] Waiting: only " << consideredStates.size() << " states with GPS (need >= 2)";
+      return false;
+    }
+    // Get all measurements so far as well as corresponding propagated poses
+    auto gpsStateIter = consideredStates.begin();
+    for(; gpsStateIter != consideredStates.end(); gpsStateIter++){
+      auto gpsState = *gpsStateIter;
+      okvis::kinematics::Transformation T_WS_state = states_.at(gpsState).pose->estimate();
+      okvis::SpeedAndBias sb_state = states_.at(gpsState).speedAndBias->estimate();
+      for(auto iter = states_.at(gpsState).GpsFactors.begin(); iter != states_.at(gpsState).GpsFactors.end(); ++iter){
+        gpsPoints.push_back(iter->errorTerm->measurement());
+        okvis::kinematics::Transformation T_WS_prop;
+        iter->errorTerm->applyPreInt(T_WS_state, sb_state, T_WS_prop);
+        worldPoints.push_back(T_WS_prop.r() + T_WS_prop.C() * gpsParametersVec_.back().r_SA);
+        covariances.push_back(iter->errorTerm->covariance());
+      }
+    }
   }
 
-  for(; gpsStateIter!= consideredStates.end(); gpsStateIter++){
-    auto gpsState = *gpsStateIter;
-    //Iterate measurements per state
-    okvis::kinematics::Transformation T_WS_state = states_.at(gpsState).pose->estimate();
-    okvis::SpeedAndBias sb_state = states_.at(gpsState).speedAndBias->estimate();
+  // Need minimum points for Umeyama to be well-conditioned
+  const size_t minPoints = static_cast<size_t>(
+      std::max(3, gpsParametersVec_.back().gpsMinInitPoints));
+  if(gpsPoints.size() < minPoints){
+    LOG(INFO) << "[GPS Init] Waiting: only " << gpsPoints.size()
+              << " GPS points collected (need >= " << minPoints << ")";
+    return false;
+  }
 
-    for(auto iter = states_.at(gpsState).GpsFactors.begin(); iter != states_.at(gpsState).GpsFactors.end(); ++iter){
-      gpsPoints.push_back(iter->errorTerm->measurement());
-      okvis::kinematics::Transformation T_WS_prop;
-      iter->errorTerm->applyPreInt(T_WS_state,sb_state,T_WS_prop);
-      worldPoints.push_back(T_WS_prop.r() + T_WS_prop.C() * gpsParametersVec_.back().r_SA);
-      covariances.push_back(iter->errorTerm->covariance());
+  // Check that GPS points span sufficient distance for meaningful alignment
+  // (avoids Umeyama failure with near-collinear/clustered points when vehicle is stopped)
+  {
+    double maxDist = 0.0;
+    for(size_t i = 0; i < gpsPoints.size(); ++i)
+      for(size_t j = i+1; j < gpsPoints.size(); ++j)
+        maxDist = std::max(maxDist, (gpsPoints[i] - gpsPoints[j]).norm());
+    if(maxDist < 3.0){
+      LOG(INFO) << "[GPS Init] Waiting: GPS point spread only " << maxDist << "m (need >= 3m)";
+      return false;
     }
   }
 
@@ -1066,11 +1244,15 @@ bool ViGraph::checkForGpsInit(okvis::kinematics::Transformation& T_GW, std::set<
   gpsPtMatrix.colwise() -= centroidGps;
   worldPtMatrix.colwise() -= centroidWorld;
 
-  if(gpsParametersVec_.back().robustGpsInit){
-    // RANSAC for robust initialization
+  if(gpsParametersVec_.back().robustGpsInit && gpsStatus_ != gpsStatus::ReInitialising){
+    // RANSAC for robust initial initialization (Idle→Initialising only).
+    // ReInitialising uses Umeyama below — buffer is empty and RANSAC needs ~40 pts.
     RigidResult ransac_init_result = estimateRigidRansac(gpsPoints, worldPoints, 20, 20, 4.0, 0.7);
+    LOG(INFO) << "[GPS Init] RANSAC: " << gpsPoints.size() << " points, inlier_ratio=" << ransac_init_result.inlier_ratio
+              << " (need >= 40 pts for RANSAC to run, >= 0.25 inlier ratio to pass)";
     if(ransac_init_result.inlier_ratio < 0.25){
-      DLOG(WARNING) << "Rejecting due to ransac_init_result.inlier_ratio < 0.25:  " << ransac_init_result.inlier_ratio << " / " << ransac_init_result.inliers.size()<< " / " << ransac_init_result.t.transpose()<< " / " << gpsPoints.size();
+      LOG(WARNING) << "[GPS Init] Rejecting: RANSAC inlier_ratio=" << ransac_init_result.inlier_ratio
+                   << " (" << ransac_init_result.inliers.size() << "/" << gpsPoints.size() << " inliers)";
       return false;
     }
     Eigen::Matrix4d T_align;
@@ -1110,8 +1292,8 @@ bool ViGraph::checkForGpsInit(okvis::kinematics::Transformation& T_GW, std::set<
 
   if(yawUncertainty < gpsParametersVec_.back().yawErrorThreshold){
 
-    if(gpsParametersVec_.back().robustGpsInit){
-      // Do a non-linear refinement in ceres to handle 
+    if(gpsParametersVec_.back().robustGpsInit && gpsStatus_ != gpsStatus::ReInitialising){
+      // Do a non-linear refinement in ceres to handle
       kinematics::Transformation T_GW_refined;
       Align4DoF_Ceres(gpsPoints, worldPoints, T_GW, T_GW_refined);
       DLOG(WARNING) << "Nonlinear refinement of T_GW - starting from :\n " << T_GW.T3x4() << std::endl << " ... ending up at \n" << T_GW_refined.T3x4();
@@ -1149,8 +1331,10 @@ int ViGraph::checkValidGpsMeasurements(GpsMeasurementDeque& inputGpsMeasurementD
     lastGpsStateId = gpsDropoutId_;
   }
   
+  int dbg_total = 0, dbg_no_state = 0, dbg_cov_filtered = 0;
   // Reverse iterate measurements
   for(auto rIterMeas = inputGpsMeasurementDeque.rbegin(); rIterMeas != inputGpsMeasurementDeque.rend() ; rIterMeas++){
+      dbg_total++;
       // Reverse iterate States to find corresponding state / measurement pairs
       while(rIterStates->second.timestamp > rIterMeas->timeStamp && rIterStates != states_.rend()){
           rIterStates++;
@@ -1158,6 +1342,9 @@ int ViGraph::checkValidGpsMeasurements(GpsMeasurementDeque& inputGpsMeasurementD
 
       // If state iterator comes to begin, measurement cannot be added
       if(rIterStates == states_.rend()){
+          dbg_no_state++;
+          LOG(WARNING) << "[GPS filter] GPS ts=" << rIterMeas->timeStamp
+                       << " too old: no matching VIO state found. Skipping remaining.";
           break;
       }
 
@@ -1165,10 +1352,17 @@ int ViGraph::checkValidGpsMeasurements(GpsMeasurementDeque& inputGpsMeasurementD
       sid = rIterStates->first;
 
       // Check For Outliers
-      
+
       // When Initializing: Reject measurements that are in general inaccurate
+      // Thresholds tuned for receiver reporting vAcc = 4 * hAcc:
+      //   horizontal sigma <= 15 m, vertical sigma <= 60 m (~93% of data passes)
       if (gpsStatus_ == gpsStatus::Off || gpsStatus_ == gpsStatus::Idle || gpsStatus_ == gpsStatus::Initialising){
-        if (rIterMeas->measurement.covariances(0,0) > std::pow(6.0,2) || rIterMeas->measurement.covariances(2,2) > std::pow(10.0,2) ){
+        const double sig_h = std::sqrt(rIterMeas->measurement.covariances(0,0));
+        const double sig_v = std::sqrt(rIterMeas->measurement.covariances(2,2));
+        if (sig_h > 15.0 || sig_v > 60.0){
+          dbg_cov_filtered++;
+          LOG(WARNING) << "[GPS filter] Rejected by covariance: sig_h=" << sig_h
+                       << "m sig_v=" << sig_v << "m (limits: 15m / 60m)";
           continue;
         }
         else {
@@ -1190,9 +1384,10 @@ int ViGraph::checkValidGpsMeasurements(GpsMeasurementDeque& inputGpsMeasurementD
 
         Eigen::Vector3d gpsMeasInWorld = T_GW_curr_est.inverse().T3x4() * rIterMeas->measurement.position.homogeneous(); // This is the antenna position in {G} transforemd to {W}
         Eigen::Vector3d error = (T_WS_state.r() + T_WS_state.C() * gpsParametersVec_.back().r_SA) - gpsMeasInWorld;
-        double sigma_x = std::sqrt(rIterMeas->measurement.covariances(0,0));
-        double sigma_y = std::sqrt(rIterMeas->measurement.covariances(1,1));
-        double sigma_z = std::sqrt(rIterMeas->measurement.covariances(2,2));
+        const double outlierScale = gpsParametersVec_.back().gpsOutlierScale;
+        double sigma_x = outlierScale * std::sqrt(rIterMeas->measurement.covariances(0,0));
+        double sigma_y = outlierScale * std::sqrt(rIterMeas->measurement.covariances(1,1));
+        double sigma_z = outlierScale * std::sqrt(rIterMeas->measurement.covariances(2,2));
 
         if(fabs(error.x()) > 3.0*sigma_x || fabs(error.y()) > 3.0*sigma_y || fabs(error.z()) > 3.0*sigma_z){
           continue;
@@ -1209,6 +1404,11 @@ int ViGraph::checkValidGpsMeasurements(GpsMeasurementDeque& inputGpsMeasurementD
         countValidMeasurements++;
         gpsMeasurementDeque.push_back(*rIterMeas);
       }
+    }
+    if(dbg_total > 0){
+      LOG(INFO) << "[GPS filter] status=" << static_cast<int>(gpsStatus_)
+                << " in=" << dbg_total << " passed=" << countValidMeasurements
+                << " cov_filtered=" << dbg_cov_filtered << " no_state=" << dbg_no_state;
     }
     return countValidMeasurements;
 }
@@ -1328,7 +1528,7 @@ bool ViGraph::initializationStrategy(kinematics::Transformation& T_GW_est) {
     case gpsStatus::Idle: // idle state, trying to get a first initialization
       
       checkForGpsInit(T_GW_init,gpsStates_, &yaw_error);
-      if(yaw_error < 5.0){
+      if(yaw_error < gpsParametersVec_.back().yawErrorThreshold){
         LOG(WARNING) << "Starting to add measurements to optimization now!";
         T_GW_est = T_GW_init;
         gpsStatus_ = gpsStatus::Initialising;
@@ -1344,6 +1544,7 @@ bool ViGraph::initializationStrategy(kinematics::Transformation& T_GW_est) {
         T_GW_init_ = T_GW_init;
         T_GW_est = T_GW_init;
         needsInitialAlignment_ = true;
+        gpsInitPointBuffer_.clear(); // no longer needed after initialization
         LOG(INFO) << "[GPS] GPS-VIO extrinsics have become observable. Initial Estimate: \n" << T_GW_init.T3x4();
       }
       break;
@@ -1973,5 +2174,32 @@ void ViGraph::writeLidarDebugStatisticsCsv(const std::string& csvFilePrefix)
 }
 
 
+
+bool ViGraph::addStationaryVelocityPrior(StateId stateId, double sigmaV) {
+  if (!states_.count(stateId)) return false;
+  State& state = states_.at(stateId);
+
+  // Remove existing prior if present (update in-place each frame while stationary).
+  if (state.stationaryVelocityPrior.residualBlockId) {
+    problem_->RemoveResidualBlock(state.stationaryVelocityPrior.residualBlockId);
+    state.stationaryVelocityPrior.residualBlockId = nullptr;
+    state.stationaryVelocityPrior.errorTerm.reset();
+  }
+
+  // Target: velocity = 0, biases unconstrained (large sigma keeps them free)
+  const double safeSigmaV = std::max(1e-6, sigmaV);
+  SpeedAndBias measurement = state.speedAndBias->estimate();
+  measurement.head<3>().setZero();
+
+  state.stationaryVelocityPrior.errorTerm = std::make_shared<ceres::SpeedAndBiasError>(
+      measurement,
+      safeSigmaV * safeSigmaV,  // velocity variance [m^2/s^2]
+      1e6,              // gyro bias variance  (unconstrained)
+      1e6               // accel bias variance (unconstrained)
+  );
+  state.stationaryVelocityPrior.residualBlockId = problem_->AddResidualBlock(
+      state.stationaryVelocityPrior.errorTerm.get(), nullptr, state.speedAndBias->parameters());
+  return true;
+}
 
 }  // namespace okvis

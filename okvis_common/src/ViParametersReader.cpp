@@ -314,6 +314,29 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
   parseEntry(file["frontend_parameters"], "num_matching_threads",
              viParameters_.frontend.num_matching_threads);
 
+  // Optional flat list of exclusion rectangles [x, y, w, h, x, y, w, h, ...].
+  // Flat sequence is the most portable format for OpenCV YAML 1.0.
+  viParameters_.frontend.mask_rects.clear();
+  cv::FileNode maskNode = file["frontend_parameters"]["mask_rects"];
+  if(maskNode.empty()) {
+    LOG(INFO) << "MASK: mask_rects not set — feature detection active on full image.";
+  } else if(!maskNode.isSeq()) {
+    LOG(WARNING) << "MASK: mask_rects found but is not a sequence — check yaml format.";
+  } else if(maskNode.isSeq()) {
+    std::vector<int> vals;
+    for(auto it = maskNode.begin(); it != maskNode.end(); ++it)
+      vals.push_back(static_cast<int>(*it));
+    for(size_t i = 0; i + 3 < vals.size(); i += 4) {
+      viParameters_.frontend.mask_rects.emplace_back(vals[i], vals[i+1], vals[i+2], vals[i+3]);
+      LOG(INFO) << "MASK: excluding rect ["
+                << vals[i] << ", " << vals[i+1] << ", "
+                << vals[i+2] << ", " << vals[i+3] << "]";
+    }
+    if(vals.size() % 4 != 0)
+      LOG(WARNING) << "MASK: mask_rects has " << vals.size()
+                   << " values, expected a multiple of 4. Last partial rect ignored.";
+  }
+
   // Parameters regarding the estimator.
   parseEntry(file["estimator_parameters"], "num_keyframes",
              viParameters_.estimator.num_keyframes);
@@ -344,6 +367,26 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
   parseEntry(file["estimator_parameters"], "drift_percentage_heuristic",
              viParameters_.estimator.drift_percentage_heuristic);
 
+  // Visual stationarity parameters (all optional; struct defaults apply when absent).
+  parseEntry(file["stationary_parameters"], "enabled",
+             viParameters_.stationary.enabled);
+  parseEntry(file["stationary_parameters"], "entry_frames",
+             viParameters_.stationary.entry_frames);
+  parseEntry(file["stationary_parameters"], "exit_frames",
+             viParameters_.stationary.exit_frames);
+  parseEntry(file["stationary_parameters"], "min_landmarks",
+             viParameters_.stationary.min_landmarks);
+  parseEntry(file["stationary_parameters"], "max_median_pixel_displacement",
+             viParameters_.stationary.max_median_pixel_displacement);
+  parseEntry(file["stationary_parameters"], "max_mean_pixel_displacement",
+             viParameters_.stationary.max_mean_pixel_displacement);
+  parseEntry(file["stationary_parameters"], "sigma_v",
+             viParameters_.stationary.sigma_v);
+  parseEntry(file["stationary_parameters"], "sigma_position",
+             viParameters_.stationary.sigma_position);
+  parseEntry(file["stationary_parameters"], "sigma_orientation",
+             viParameters_.stationary.sigma_orientation);
+
   // Some options for how and what to output.
   parseEntry(file["output_parameters"], "display_topview",
              viParameters_.output.display_topview);
@@ -368,6 +411,39 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
     }
   } else {
     LOG(INFO) << "No GPS declared";
+  }
+
+  // DEM Parameters
+  if(file["dem_parameters"].isMap()){
+    viParameters_.dem = okvis::DemParameters();
+    auto demNode = file["dem_parameters"];
+    if(demNode["use"].isInt() || demNode["use"].isString()) {
+      bool useVal = false;
+      if(demNode["use"].isInt()) useVal = int(demNode["use"]) != 0;
+      else { std::string s = std::string(demNode["use"]); useVal = (s == "true" || s == "1" || s == "yes"); }
+      (*viParameters_.dem).use = useVal;
+    }
+    if(demNode["sigma_h"].isReal()) demNode["sigma_h"] >> (*viParameters_.dem).sigma_h;
+    if(demNode["d_above_ground"].isReal()) demNode["d_above_ground"] >> (*viParameters_.dem).d_above_ground;
+    if(demNode["r_SA"].isSeq()) {
+      (*viParameters_.dem).r_SA = Eigen::Vector3d(
+          double(demNode["r_SA"][0]), double(demNode["r_SA"][1]), double(demNode["r_SA"][2]));
+    }
+    if(demNode["use_dem_height_for_gps"].isInt() || demNode["use_dem_height_for_gps"].isString()) {
+      bool v = false;
+      if(demNode["use_dem_height_for_gps"].isInt()) v = int(demNode["use_dem_height_for_gps"]) != 0;
+      else { std::string s = std::string(demNode["use_dem_height_for_gps"]); v = (s == "true" || s == "1" || s == "yes"); }
+      (*viParameters_.dem).useDemHeightForGps = v;
+    }
+    if(demNode["dem_fusion_alpha"].isReal()) demNode["dem_fusion_alpha"] >> (*viParameters_.dem).demFusionAlpha;
+    LOG(INFO) << "Parsed DEM parameters: use=" << std::boolalpha << (*viParameters_.dem).use
+              << ", sigma_h=" << (*viParameters_.dem).sigma_h
+              << "m, d_above_ground=" << (*viParameters_.dem).d_above_ground
+              << "m, r_SA=[" << (*viParameters_.dem).r_SA.transpose() << "]"
+              << ", use_dem_height_for_gps=" << (*viParameters_.dem).useDemHeightForGps
+              << ", dem_fusion_alpha=" << (*viParameters_.dem).demFusionAlpha;
+  } else {
+    LOG(INFO) << "No DEM parameters declared";
   }
 
   // done!
@@ -639,6 +715,24 @@ bool ViParametersReader::getGpsCalibration(const cv::FileNode& calibrationNode, 
              gpsParameters.yawErrorThreshold);
   parseEntry(calibrationNode, "robust_gps_init",
              gpsParameters.robustGpsInit);
+  parseEntry(calibrationNode, "gps_sigma_scale",
+             gpsParameters.gpsSigmaScale);
+  parseEntry(calibrationNode, "gps_outlier_scale",
+             gpsParameters.gpsOutlierScale);
+  parseEntry(calibrationNode, "gps_dropout_threshold",
+             gpsParameters.gpsDropoutThreshold);
+  parseEntry(calibrationNode, "gps_max_correction",
+             gpsParameters.gpsMaxCorrection);
+  parseEntry(calibrationNode, "gps_min_init_points",
+             gpsParameters.gpsMinInitPoints);
+  parseEntry(calibrationNode, "max_h_err",
+             gpsParameters.maxHErr);
+  parseEntry(calibrationNode, "max_v_err",
+             gpsParameters.maxVErr);
+  parseEntry(calibrationNode, "min_fix_status",
+             gpsParameters.minFixStatus);
+  parseEntry(calibrationNode, "geoid_model",
+             gpsParameters.geoidModel);
 
   return true;
 }

@@ -44,6 +44,7 @@
 /// \brief Main
 /// \param argc argc.
 /// \param argv argv.
+
 int main(int argc, char **argv)
 {
 
@@ -52,26 +53,64 @@ int main(int argc, char **argv)
   FLAGS_colorlogtostderr = 1;
   FLAGS_minloglevel = 0;
 
-  if (argc != 4 && argc != 5) {
-    LOG(ERROR)<<
-    "Usage: ./" << argv[0] << " configuration-yaml-file dataset-folder [-rpg]";
+  // if (argc != 4 && argc != 5) {
+  //   LOG(ERROR)<<
+  //   "Usage: ./" << argv[0] << " configuration-yaml-file dataset-folder [-rpg]";
+  //   return EXIT_FAILURE;
+  // }
+
+  // okvis::Duration deltaT(0.0);
+  // bool rpg = false;
+  // std::string savePath;
+  // savePath = std::string(argv[2]);
+  // if (argc == 5) {
+  //   savePath = std::string(argv[3]);
+  //   if(strcmp(argv[4], "-rpg")==0) {
+  //     rpg = true;
+  //   }
+  // }
+  // else if (argc == 4) {
+  //   if(strcmp(argv[3], "-rpg")!=0)  {
+  //     savePath = std::string(argv[3]);
+  //   }
+  // }
+
+  // 修改：增加对 DEM 路径参数的支持，允许 argc 为 4, 5, 或 6
+  if (argc < 3 || argc > 6) {
+    LOG(ERROR) <<
+    "Usage: ./" << argv[0] << " configuration-yaml-file dataset-folder [save-path] [dem-path] [-rpg]";
     return EXIT_FAILURE;
   }
 
   okvis::Duration deltaT(0.0);
   bool rpg = false;
-  std::string savePath;
-  savePath = std::string(argv[2]);
-  if (argc == 5) {
-    savePath = std::string(argv[3]);
-    if(strcmp(argv[4], "-rpg")==0) {
+  std::string savePath = std::string(argv[2]); // 默认 savePath 与 dataset 同级
+  std::string demPath = "";
+
+  // 简单的参数解析逻辑
+  for (int i = 1; i < argc; ++i) {
+    std::string arg(argv[i]);
+    if (arg == "-rpg") {
       rpg = true;
+    } else if (arg.size() > 4 && arg.substr(arg.size() - 4) == ".tif") {
+      demPath = arg; // 识别 .tif 文件作为 DEM 路径
     }
   }
-  else if (argc == 4) {
-    if(strcmp(argv[3], "-rpg")!=0)  {
-      savePath = std::string(argv[3]);
+
+  // 处理 savePath (排除特定的参数)
+  if (argc >= 4) {
+    for (int i = 3; i < argc; ++i) {
+      std::string arg(argv[i]);
+      if (arg != "-rpg" && arg.find(".tif") == std::string::npos) {
+        savePath = arg;
+        break;
+      }
     }
+  }
+
+  // Create savePath directory if it does not exist.
+  if(!savePath.empty()) {
+    boost::filesystem::create_directories(savePath);
   }
 
   // read configuration file
@@ -91,7 +130,7 @@ int main(int argc, char **argv)
   } else {
     datasetReader.reset(new okvis::DatasetReader(
                           path, int(parameters.nCameraSystem.numCameras()),
-                          parameters.camera.sync_cameras, deltaT, parameters.gps));
+                          parameters.camera.sync_cameras, deltaT, parameters.gps, parameters.dem, demPath));
   }
 
   // also check DBoW2 vocabulary
@@ -144,6 +183,25 @@ int main(int argc, char **argv)
     } else {
       LOG(ERROR) << "Unknown GPS data type.";
       return EXIT_FAILURE;
+    }
+
+    // Register DEM callback for high-frequency height constraints (after T_GW is fixed)
+    if(!demPath.empty() && parameters.dem) {
+      auto* datasetReaderPtr = dynamic_cast<okvis::DatasetReader*>(datasetReader.get());
+      if(datasetReaderPtr) {
+        const double sigma_h = (*parameters.dem).sigma_h;
+        const double d_above_ground = (*parameters.dem).d_above_ground;
+        const Eigen::Vector3d r_SA = (*parameters.dem).r_SA;
+        const bool use_dem_height_for_gps = (*parameters.dem).useDemHeightForGps;
+        const double dem_fusion_alpha = (*parameters.dem).demFusionAlpha;
+        estimator.setDemCallback(
+            [datasetReaderPtr](double lat, double lon) -> double {
+              return datasetReaderPtr->getDemHeight(lat, lon);
+            },
+            sigma_h, d_above_ground, r_SA, use_dem_height_for_gps, dem_fusion_alpha);
+        LOG(INFO) << "DEM callback registered (sigma_h=" << sigma_h
+                  << "m, d_above_ground=" << d_above_ground << "m).";
+      }
     }
   }
 

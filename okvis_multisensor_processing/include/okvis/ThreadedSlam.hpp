@@ -23,6 +23,7 @@
 #include <thread>
 #include <atomic>
 #include <algorithm>
+#include <functional>
 
 #include <opencv2/core/core.hpp>
 
@@ -151,6 +152,24 @@ class ThreadedSlam : public ViInterface {
   virtual bool addGeodeticGpsMeasurement(const okvis::Time & stamp,
                                          double lat, double lon, double height,
                                          double hAcc, double vAcc);
+
+  /**
+   * \brief Register a DEM height query callback.
+   * \param callback     Function double(lat, lon) returning terrain height [m].
+   *                     Return value < -100 signals an invalid/out-of-bounds query.
+   * \param sigma_h      Height uncertainty (1-sigma) [m].
+   * \param d_above_ground  Sensor height above ground [m].
+   * \param r_SA         Sensor offset in IMU frame (same as GPS antenna lever arm).
+   */
+  void setDemCallback(std::function<double(double, double)> callback,
+                      double sigma_h = 2.0,
+                      double d_above_ground = 0.0,
+                      const Eigen::Vector3d& r_SA = Eigen::Vector3d::Zero(),
+                      bool use_dem_height_for_gps = false,
+                      double dem_fusion_alpha = 0.0) {
+    estimator_.setDemCallback(callback, sigma_h, d_above_ground, r_SA,
+                              use_dem_height_for_gps, dem_fusion_alpha);
+  }
 
     /**
    * \brief             Add alignment constraint
@@ -386,6 +405,27 @@ private:
 
   State lastOptimisedState_; ///< Store at least pose/id/timestamp here to avoid race on estimator_.
   State preLastOptimisedState_; ///< Store at previous to last state here to avoid race.
+
+  struct VisualMotionStats {
+    bool valid = false;
+    int numMatches = 0;
+    double medianPixelDisplacement = 0.0;
+    double meanPixelDisplacement = 0.0;
+  };
+
+  using VisualObservationKey = std::pair<size_t, uint64_t>;
+  using VisualObservationMap = std::map<VisualObservationKey, Eigen::Vector2d>;
+
+  VisualMotionStats computeVisualMotionStats(
+      const okvis::MultiFramePtr& multiFrame,
+      VisualObservationMap* currentObservations) const;
+  void updateVisualStationarity(const okvis::MultiFramePtr& multiFrame);
+
+  bool visualStationaryActive_ = false;          ///< Whether visual stationarity constraints are active.
+  int visualStationaryEntryCount_ = 0;           ///< Consecutive visually-stationary frames.
+  int visualStationaryExitCount_ = 0;            ///< Consecutive visually-moving frames.
+  StateId visualStationaryAnchorId_;             ///< Anchor state for no-motion relative pose constraints.
+  VisualObservationMap previousVisualObservations_; ///< Previous frame's 3D-landmark pixel observations.
 
   std::atomic_bool shutdown_; ///< Has shutdown been called?
 

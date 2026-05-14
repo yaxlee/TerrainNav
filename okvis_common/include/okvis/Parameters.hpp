@@ -117,6 +117,9 @@ struct FrontendParameters {
   bool use_cnn; ///< Use the CNN (if available) to filter out dynamic content / sky.
   bool parallelise_detection; ///< Run parallel detect & describe.
   int num_matching_threads; ///< Parallelise matching with this number of threads.
+  /// Rectangular regions (x, y, width, height) excluded from feature detection.
+  /// Applied to all cameras. Useful to mask out vehicle body parts visible in the image.
+  std::vector<cv::Rect> mask_rects;
 };
 
 /**
@@ -157,13 +160,38 @@ struct GpsParameters {
     Eigen::Vector3d r_SA; ///< Translation IMU sensor to GPS antenna; known from calibration
     double yawErrorThreshold; /// < Threshold on maximum estimated yaw error [degree] for initialization
     bool robustGpsInit; /// < Flag if robust initialization is needed (low-grade GPS sensor)
+    double gpsSigmaScale; ///< Multiplier on GPS sigmas inside the optimizer (>1 reduces weight, slows correction)
+    double gpsOutlierScale; ///< Multiplier on the 3-sigma outlier rejection threshold (>1 relaxes rejection, useful for fast platforms with tight reported sigmas)
+    double gpsDropoutThreshold; ///< Minimum VIO time [s] since last GPS state before re-init is triggered (prevents false re-init after GPS loop closure)
+    double gpsMaxCorrection; ///< Maximum allowed T_GW translation correction [m] for GPS loop closure; larger corrections are rejected as likely bad Umeyama estimates
+    int gpsMinInitPoints; ///< Minimum number of GPS points required for Umeyama alignment (higher = more robust, especially during sharp turns)
+
+    double maxHErr; ///< Maximum horizontal error [m] for GPS bad-point filtering (reader-side)
+    double maxVErr; ///< Maximum vertical error [m] for GPS bad-point filtering (reader-side)
+    int minFixStatus; ///< Minimum fix_status to accept (0=no filter, 1=reject status 0, 2=require RTK)
+    std::string geoidModel; ///< GeographicLib geoid model name for undulation correction (e.g. "egm96-5")
 
     /// Default Constructor (no GPS)
     GpsParameters() : type("none"), r_SA(Eigen::Vector3d(0., 0., 0.)),
-                      yawErrorThreshold(0.), robustGpsInit(false)
+                      yawErrorThreshold(0.), robustGpsInit(false),
+                      gpsSigmaScale(1.0), gpsOutlierScale(1.0),
+                      gpsDropoutThreshold(3.0), gpsMaxCorrection(50.0), gpsMinInitPoints(10),
+                      maxHErr(1e9), maxVErr(1e9), minFixStatus(0), geoidModel("")
                       {}
 };
 
+
+/**
+ * @brief Parameters for DEM-based height constraints.
+ */
+struct DemParameters {
+  bool use = false;                  ///< Enable DEM height factors.
+  double sigma_h = 2.0;             ///< Height constraint uncertainty (1-sigma) [m].
+  double d_above_ground = 0.0;      ///< Sensor height above ground [m] (constant, e.g. for ground vehicles).
+  Eigen::Vector3d r_SA = Eigen::Vector3d::Zero(); ///< Sensor-to-body offset in IMU frame.
+  bool useDemHeightForGps = false;  ///< Fuse GPS altitude with DEM height (requires geodetic data_type).
+  double demFusionAlpha = 0.0;      ///< GPS weight in altitude fusion: 0=full DEM, 1=full GPS, 0.5=equal blend.
+};
 
 /// @brief  Struct to specify the parameters of a LiDAR sensor
 struct LidarParameters {
@@ -175,15 +203,32 @@ struct LidarParameters {
 
 
 /// @brief Struct to combine all parameters and settings.
+/**
+ * @brief Parameters for visual stationarity detection and constraints.
+ */
+struct StationaryParameters {
+  bool   enabled                       = true;  ///< Enable visual stationarity constraints.
+  int    entry_frames                  = 5;     ///< Consecutive visually-stationary frames required to enter.
+  int    exit_frames                   = 3;     ///< Consecutive visually-moving frames required to exit.
+  int    min_landmarks                 = 20;    ///< Minimum repeated 3D landmarks for a valid decision.
+  double max_median_pixel_displacement = 0.45;  ///< [px] Median repeated-landmark displacement threshold.
+  double max_mean_pixel_displacement   = 0.90;  ///< [px] Mean repeated-landmark displacement threshold.
+  double sigma_v                       = 0.02;  ///< [m/s] Zero-velocity constraint 1-sigma.
+  double sigma_position                = 0.03;  ///< [m] Relative no-motion position constraint 1-sigma.
+  double sigma_orientation             = 0.01;  ///< [rad] Relative no-motion orientation constraint 1-sigma.
+};
+
 struct ViParameters {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   okvis::cameras::NCameraSystem nCameraSystem;  ///< Camera extrinsics and intrinsics.
   CameraParameters camera; ///< Camera parameters.
   ImuParameters imu; ///< Imu parameters.
   std::optional<GpsParameters> gps; ///< Gps parameters.
+  std::optional<DemParameters> dem; ///< DEM height constraint parameters.
   std::optional<LidarParameters> lidar; ///< LiDAR parameters
   FrontendParameters frontend; ///< Frontend parameters.
   EstimatorParameters estimator; ///< Estimator parameters.
+  StationaryParameters stationary; ///< Visual stationarity parameters.
   OutputParameters output; ///< Output parameters.
   CameraCalibration rgb;  ///< RGB parameters.
 };

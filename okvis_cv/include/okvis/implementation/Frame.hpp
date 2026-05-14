@@ -126,7 +126,8 @@ int Frame::detect()
   // resizing and filling in zeros in Frame::describe() as some keypoints are removed there:
   landmarkIds_.clear();
 
-  // run the detector
+  // run the detector (no mask: BRISK does not support detector masks;
+  // post-detection filtering is done in Frontend::detectAndDescribe)
   OKVIS_ASSERT_TRUE_DBG(Exception, detector_ != nullptr,
                         "Detector not initialised!")
   detector_->detect(image_, keypoints_);

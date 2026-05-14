@@ -22,9 +22,12 @@
 #include <iostream>
 #include <fstream>
 #include <atomic>
+#include <memory>
 #include <thread>
 
 #include <glog/logging.h>
+
+#include <GeographicLib/Geoid.hpp>
 
 #include <okvis/assert_macros.hpp>
 #include <okvis/Parameters.hpp>
@@ -138,6 +141,12 @@ namespace okvis {
         int numCameras_ = -1;
         size_t depthCameraId_ = 0;
         okvis::Time t_gps_; ///< Timestamp of the last gps signal received
+
+        std::unique_ptr<GeographicLib::Geoid> geoid_; ///< Geoid undulation model for ellipsoidal->orthometric correction
+        double maxHErr_ = 1e9; ///< GPS horizontal error filter threshold [m]
+        double maxVErr_ = 1e9; ///< GPS vertical error filter threshold [m]
+        int minFixStatus_ = 0; ///< Minimum fix_status to accept (0=no filter)
+        uint64_t lastGpsNs_ = 0; ///< Timestamp of last accepted GPS measurement [ns], for burst-duplicate filtering
 
     };
 

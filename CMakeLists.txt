@@ -19,7 +19,7 @@ option (HAVE_LIBREALSENSE
 option (USE_NN
         "Use keypoint classification as part of okvis, requires torch" ON)
 option (USE_GPU
-        "Use keypoint classification with GPU inference, requires torch with Cuda" OFF)
+        "Use keypoint classification with GPU inference, requires torch with Cuda" ON)
 option (DO_TIMING
         "Enable timing" ON)
 option (BUILD_SHARED_LIBS
@@ -211,6 +211,12 @@ if(BUILD_APPS)
 
   # require GeographicLib
   find_package(GeographicLib REQUIRED)
+
+  find_package(GDAL REQUIRED)
+
+  if(GDAL_FOUND)
+      message(STATUS "Found GDAL: ${GDAL_VERSION}")
+  endif()
 
   # OKVIS2 app
   add_executable(okvis_app_synchronous okvis_apps/src/okvis_app_synchronous.cpp)

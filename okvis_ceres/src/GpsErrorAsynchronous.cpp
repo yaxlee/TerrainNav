@@ -167,7 +167,13 @@ bool GpsErrorAsynchronous::EvaluateWithMinimalJacobians(double const* const * pa
 
     // ----- PRE-INTEGRATION PROPAGATION - END -----
 
-    if(useImuCovariance){
+    // Only blend IMU propagation covariance when the time gap is short enough
+    // that the IMU uncertainty is meaningful.  For large Delta_t the IMU covariance
+    // dominates and makes covOverall ill-conditioned, causing LLT failure (NaN).
+    static constexpr double kMaxImuCovDt = 2.0; // [s] beyond this, GPS-only covariance is used
+    const bool useImuCovHere = useImuCovariance && (Delta_t <= kMaxImuCovDt);
+
+    if(useImuCovHere){
 
         // We need to first transform the Covariance into world frame!
         Eigen::Matrix<double,15,15> T = Eigen::Matrix<double,15,15>::Identity();
@@ -182,13 +188,17 @@ bool GpsErrorAsynchronous::EvaluateWithMinimalJacobians(double const* const * pa
         Jws.block<3,3>(0,0) = C_GW;
         Jws.block<3,3>(0,3) = -C_GW * okvis::kinematics::crossMx(T_WS_tk.C()*r_SA);
 
-        Eigen::Matrix<double,3,3> covOverall = gpsCovariance_ + Jws * P.block<6,6>(0,0) * Jws.transpose(); // consider both sources of covariances
+        Eigen::Matrix<double,3,3> covOverall = gpsCovariance_ + Jws * P.block<6,6>(0,0) * Jws.transpose();
         Eigen::LLT<information_t> lltOfInformation(covOverall.inverse());
-        squareRootInformation_ = lltOfInformation.matrixL().transpose();
+        if(lltOfInformation.info() == Eigen::Success) {
+          squareRootInformation_ = lltOfInformation.matrixL().transpose();
+        } else {
+          // Covariance still ill-conditioned despite Delta_t check — fall back to GPS-only.
+          Eigen::LLT<information_t> lltGps(gpsCovariance_.inverse());
+          squareRootInformation_ = lltGps.matrixL().transpose();
+        }
 
-    }
-
-    else{
+    } else {
         Eigen::LLT<information_t> lltOfInformation(gpsCovariance_.inverse());
         squareRootInformation_ = lltOfInformation.matrixL().transpose();
     }

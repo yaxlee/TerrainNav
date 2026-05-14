@@ -17,6 +17,7 @@
  */
  
 #include <limits>
+#include <sstream>
 
 #include <boost/filesystem.hpp>
 #include <opencv2/core/core.hpp>
@@ -25,19 +26,67 @@
 
 #include <okvis/ViInterface.hpp>
 #include <okvis/DatasetReader.hpp>
+#include <gdal_priv.h>
+#include <cpl_conv.h>
+
 
 namespace okvis {
 
 DatasetReader::DatasetReader(
   const std::string& path, size_t numCameras, const std::set<size_t> &syncCameras,
-  const Duration & deltaT, const std::optional<GpsParameters>& gpsParameters) :
+  const Duration & deltaT, const std::optional<GpsParameters>& gpsParameters,
+  const std::optional<DemParameters>& demParameters, const std::string& demPath) :
   numCameras_(numCameras), syncCameras_(syncCameras), deltaT_(deltaT) {
+  if (demParameters) {
+    useDemHeightForGps_ = (*demParameters).useDemHeightForGps;
+    demSigmaH_ = (*demParameters).sigma_h;
+  }
  
   if(gpsParameters) {
     gpsFlag_ = true;
     gpsDataType_ = (*gpsParameters).type;
     OKVIS_ASSERT_TRUE(Exception, gpsDataType_=="cartesian" || gpsDataType_=="geodetic" || gpsDataType_=="geodetic-leica",
                       "Unknown GPS data type specified")
+    maxHErr_ = (*gpsParameters).maxHErr;
+    maxVErr_ = (*gpsParameters).maxVErr;
+    minFixStatus_ = (*gpsParameters).minFixStatus;
+    const std::string& geoidModel = (*gpsParameters).geoidModel;
+    if (!geoidModel.empty()) {
+      try {
+        geoid_ = std::make_unique<GeographicLib::Geoid>(geoidModel);
+        LOG(INFO) << "[GPS] Geoid model loaded: " << geoidModel;
+      } catch (const std::exception& e) {
+        LOG(WARNING) << "[GPS] Failed to load geoid model '" << geoidModel << "': " << e.what()
+                     << " -- geoid undulation correction disabled.";
+      }
+    }
+
+    if (!demPath.empty()) {
+      GDALAllRegister();
+      demDataset_ = (GDALDataset*)GDALOpen(demPath.c_str(), GA_ReadOnly);
+      if (demDataset_ != nullptr) {
+          demDataset_->GetGeoTransform(adfGeoTransform_);
+
+          OGRSpatialReference oSourceSRS, oTargetSRS;
+          oSourceSRS.importFromEPSG(4326); // WGS84
+
+          const char* pszProjection = demDataset_->GetProjectionRef();
+          oTargetSRS.importFromWkt(pszProjection);
+
+          oSourceSRS.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
+          oTargetSRS.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
+
+          poCT_ = OGRCreateCoordinateTransformation(&oSourceSRS, &oTargetSRS);
+
+          GDALRasterBand* band = demDataset_->GetRasterBand(1);
+          int hasNoData;
+          noDataValue_ = band->GetNoDataValue(&hasNoData);
+          LOG(INFO) << "DEM loaded. Target CRS: " << oTargetSRS.GetName();
+
+      } else {
+          LOG(ERROR) << "Failed to load DEM at " << demPath;
+      }
+    }
   }
   else {
     gpsFlag_ = false;
@@ -50,6 +99,54 @@ DatasetReader::DatasetReader(
 
 DatasetReader::~DatasetReader() {
   stopStreaming();
+  if (poCT_) {
+    OGRCoordinateTransformation::DestroyCT(poCT_);
+    poCT_ = nullptr;
+    LOG(INFO) << "GDAL Coordinate Transformation object destroyed.";
+  }
+
+  // 3. 关闭 GDAL 数据集 [cite: 899]
+  if (demDataset_) {
+    GDALClose(demDataset_);
+    demDataset_ = nullptr;
+    LOG(INFO) << "GDAL Dataset closed.";
+  }
+}
+
+// DEM Reader
+double DatasetReader::getDemHeight(double lat, double lon) {
+  
+  if (!demDataset_ || !poCT_) return -1.0;
+
+  double x = lon;
+  double y = lat;
+  if (!poCT_->Transform(1, &x, &y)) {
+    return -1.0;
+  }
+
+  double d = adfGeoTransform_[1] * adfGeoTransform_[5] - adfGeoTransform_[2] * adfGeoTransform_[4];
+  int pixel = static_cast<int>((adfGeoTransform_[5] * (x - adfGeoTransform_[0]) - 
+                                adfGeoTransform_[2] * (y - adfGeoTransform_[3])) / d);
+  int line = static_cast<int>((adfGeoTransform_[1] * (y - adfGeoTransform_[3]) - 
+                               adfGeoTransform_[4] * (x - adfGeoTransform_[0])) / d);
+
+  if (pixel < 0 || pixel >= demDataset_->GetRasterXSize() || 
+      line < 0 || line >= demDataset_->GetRasterYSize()) {
+    return -1.0;
+  }
+
+  float val;
+  CPLErr err = demDataset_->GetRasterBand(1)->RasterIO(
+      GF_Read, pixel, line, 1, 1, &val, 1, 1, GDT_Float32, 0, 0);
+
+  if (err != CE_None) {
+    LOG(WARNING) << "Failed to read DEM value at pixel " << pixel << ", line " << line;
+    return -1.0;
+  }
+
+  if (val == noDataValue_) return -1.0;
+  
+  return static_cast<double>(val);
 }
 
 bool DatasetReader::setDatasetPath(const std::string & path) {
@@ -487,6 +584,16 @@ void  DatasetReader::processing() {
               std::getline(gstream, gs, ',');
               uint64_t gnanoseconds = std::stol(gs.c_str()) - GNSS_LEAP_NANOSECONDS;
 
+              // Filter burst-duplicate measurements (GPS receiver outputs stale buffered
+              // fixes after a dropout gap, all within a few ms with impossible velocities).
+              static constexpr uint64_t kMinGpsIntervalNs = 100000000ULL; // 0.1s
+              if (lastGpsNs_ > 0 && gnanoseconds - lastGpsNs_ < kMinGpsIntervalNs) {
+                LOG(WARNING) << "[GPS filter] Burst duplicate dropped: dt="
+                             << (gnanoseconds - lastGpsNs_) / 1e6 << "ms < 100ms";
+                t_gps_.fromNSec(gnanoseconds);
+                continue;
+              }
+
               Eigen::Vector3d pos;
               for (int j = 0; j < 3; ++j) {
                 std::getline(gstream, gs, ',');
@@ -499,6 +606,7 @@ void  DatasetReader::processing() {
                 err[j] = std::stof(gs);
               }
 
+              lastGpsNs_ = gnanoseconds;
               t_gps_.fromNSec(gnanoseconds);
 
               // add the GPS measurement for (blocking) processing
@@ -523,7 +631,8 @@ void  DatasetReader::processing() {
 
               // 4th entry height / altitude
               std::getline(gstream, gs, ',');
-              double alt = std::stod(gs.c_str());
+              double alt_raw = std::stod(gs.c_str());
+              double alt = alt_raw; // default: use GPS altitude
 
               // 5th horizontal error
               std::getline(gstream, gs, ',');
@@ -532,6 +641,67 @@ void  DatasetReader::processing() {
               // 6th vertical error
               std::getline(gstream, gs, ',');
               double vErr = std::stod(gs.c_str());
+
+              // 7th-12th: vx, vy, vz, vel_dt, cov_type, fix_status (optional extra columns)
+              std::string remaining;
+              std::getline(gstream, remaining);
+              if (!remaining.empty() && remaining.back() == '\r') remaining.pop_back();
+
+              int fixStatus = -1;
+              if (!remaining.empty()) {
+                std::istringstream rem(remaining);
+                std::string col;
+                int colIdx = 0;
+                while (std::getline(rem, col, ',')) {
+                  if (colIdx == 5) { // 6th extra column = fix_status
+                    if (!col.empty() && col.back() == '\r') col.pop_back();
+                    if (!col.empty()) fixStatus = std::stoi(col);
+                    break;
+                  }
+                  ++colIdx;
+                }
+              }
+
+              // filter by fix_status
+              if (fixStatus >= 0 && minFixStatus_ > 0 && fixStatus < minFixStatus_) {
+                LOG(WARNING) << "[GPS filter] fix_status=" << fixStatus << " < min=" << minFixStatus_
+                             << " t=" << gnanoseconds;
+                continue;
+              }
+
+              // skip measurements with zero hErr (invalid covariance)
+              if (hErr == 0.0) {
+                LOG(WARNING) << "[GPS filter] hErr=0 (invalid covariance) t=" << gnanoseconds;
+                continue;
+              }
+
+              // filter bad GPS points by error thresholds
+              if (hErr > maxHErr_ || vErr > maxVErr_) {
+                LOG(WARNING) << "[GPS filter] hErr=" << hErr << " vErr=" << vErr
+                             << " exceeds max (hErr_max=" << maxHErr_ << " vErr_max=" << maxVErr_
+                             << ") t=" << gnanoseconds;
+                continue;
+              }
+
+              // altitude resolution: geoid correction, then optionally DEM replacement
+              if (geoid_) {
+                double undulation = (*geoid_)(lat, lon);
+                alt = alt_raw - undulation; // ellipsoidal -> orthometric
+                static bool geoidLoggedOnce = false;
+                if (!geoidLoggedOnce) {
+                  LOG(INFO) << "[GPS geoid] First correction: undulation=" << undulation
+                            << "m at (lat=" << lat << ", lon=" << lon
+                            << "), alt_ellipsoidal=" << alt_raw << "m -> alt_orthometric=" << alt << "m";
+                  geoidLoggedOnce = true;
+                }
+              }
+              if (useDemHeightForGps_) {
+                double h_dem = getDemHeight(lat, lon);
+                if (h_dem >= -100.0) {
+                  alt = h_dem;      // DEM replaces GPS altitude
+                  vErr = demSigmaH_; // DEM sigma replaces GPS vErr
+                }
+              }
 
               t_gps_.fromNSec(gnanoseconds);
 

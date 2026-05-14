@@ -202,6 +202,11 @@ class Frontend : public ViFrontendInterface {
     initialiseBriskFeatureDetectors();
   }
 
+  /// @brief Set rectangular regions excluded from feature detection (e.g. vehicle body parts).
+  void setDetectionMaskRects(const std::vector<cv::Rect>& rects) {
+    detectionMaskRects_ = rects;
+  }
+
   /// @}
   /// @name Setters related to the BRISK descriptor
   /// @{
@@ -261,6 +266,7 @@ private:
 
   bool isInitialized_;        ///< Is the pose initialised?
   const size_t numCameras_;   ///< Number of cameras in the configuration.
+  std::vector<cv::Rect> detectionMaskRects_; ///< Rectangles excluded from feature detection.
 
   /// @name BRISK detection parameters
   /// @{

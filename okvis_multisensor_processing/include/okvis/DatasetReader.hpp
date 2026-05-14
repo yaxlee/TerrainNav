@@ -30,6 +30,12 @@
 #include <okvis/FrameTypedefs.hpp>
 #include <okvis/Measurements.hpp>
 #include <okvis/ViSensorBase.hpp>
+#include <gdal_priv.h>
+#include <cpl_conv.h>
+#include <GeographicLib/UTMUPS.hpp>
+#include <GeographicLib/Geoid.hpp>
+#include <ogr_spatialref.h>
+#include <memory>
 
 /// \brief okvis Main namespace of this package.
 namespace okvis {
@@ -51,7 +57,10 @@ public:
   /// @param syncCameras Camera group to force synchronisation.
   /// @param deltaT Duration [s] to skip in the beginning.
   DatasetReader(const std::string& path, size_t numCameras, const std::set<size_t> & syncCameras,
-                const Duration & deltaT = Duration(0.0), const std::optional<GpsParameters>& gpsParameters = std::nullopt);
+                const Duration & deltaT = Duration(0.0),
+                const std::optional<GpsParameters>& gpsParameters = std::nullopt,
+                const std::optional<DemParameters>& demParameters = std::nullopt,
+                const std::string& demPath = "");
 
   /// @brief Destructor: stops streaming.
   virtual ~DatasetReader();
@@ -116,6 +125,27 @@ private:
   okvis::Time t_gps_; ///< Timestamp of the last gps signal received
   std::ifstream gpsFile_; ///< Gps csv file.
 
+  double maxHErr_ = std::numeric_limits<double>::max(); ///< Max horizontal error threshold [m]
+  double maxVErr_ = std::numeric_limits<double>::max(); ///< Max vertical error threshold [m]
+  int minFixStatus_ = 0; ///< Minimum fix_status (0=disabled, 1=reject status=0)
+  uint64_t lastGpsNs_ = 0; ///< Timestamp of last accepted GPS measurement [ns], for burst-duplicate filtering
+  std::unique_ptr<GeographicLib::Geoid> geoid_; ///< Geoid model for ellipsoidal->orthometric correction
+
+  // DEM-GPS integration
+  bool useDemHeightForGps_ = false; ///< If true: replace GPS alt with DEM alt in reader; if false: blend in backend
+  double demSigmaH_ = 2.0;          ///< Vertical uncertainty [m] used when DEM replaces GPS altitude
+
+  GDALDataset* demDataset_ = nullptr; ///< GDAL 数据集指针，用于读取 .tif 文件
+  double adfGeoTransform_[6];        ///< 存储 DEM 的 6 参数仿射变换
+  float noDataValue_; // 存储从tif读取的nodata值
+  OGRCoordinateTransformation* poCT_ = nullptr;
+
+public:
+  /// @brief Query terrain height from DEM at a given geodetic coordinate.
+  /// @param lat Latitude [degrees].
+  /// @param lon Longitude [degrees].
+  /// @return Height [m], or -1.0 if out of bounds / not loaded.
+  double getDemHeight(double lat, double lon);
 };
 
 }
