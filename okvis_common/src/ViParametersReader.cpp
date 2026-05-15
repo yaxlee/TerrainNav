@@ -717,14 +717,22 @@ bool ViParametersReader::getGpsCalibration(const cv::FileNode& calibrationNode, 
              gpsParameters.robustGpsInit);
   parseEntry(calibrationNode, "gps_sigma_scale",
              gpsParameters.gpsSigmaScale);
+  parseEntry(calibrationNode, "gps_loss_scale",
+             gpsParameters.gpsLossScale);
   parseEntry(calibrationNode, "gps_outlier_scale",
              gpsParameters.gpsOutlierScale);
   parseEntry(calibrationNode, "gps_dropout_threshold",
              gpsParameters.gpsDropoutThreshold);
   parseEntry(calibrationNode, "gps_max_correction",
              gpsParameters.gpsMaxCorrection);
+  parseEntry(calibrationNode, "gps_max_yaw_correction",
+             gpsParameters.gpsMaxYawCorrection);
   parseEntry(calibrationNode, "gps_min_init_points",
              gpsParameters.gpsMinInitPoints);
+  parseEntry(calibrationNode, "gps_min_reinit_points",
+             gpsParameters.gpsMinReInitPoints);
+  parseEntry(calibrationNode, "gps_max_speed",
+             gpsParameters.gpsMaxSpeed);
   parseEntry(calibrationNode, "max_h_err",
              gpsParameters.maxHErr);
   parseEntry(calibrationNode, "max_v_err",

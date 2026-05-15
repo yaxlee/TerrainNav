@@ -492,6 +492,17 @@ class ViGraph
   /// \return True on success.
   bool addStationaryVelocityPrior(StateId stateId, double sigmaV);
 
+  /// \brief Add (or update) a stationary pose prior on a state.
+  /// \param stateId State to constrain.
+  /// \param T_WS Stationary pose measurement.
+  /// \param sigmaPosition Position 1-sigma [m].
+  /// \param sigmaOrientation Orientation 1-sigma [rad].
+  /// \return True on success.
+  bool addStationaryPosePrior(StateId stateId,
+                              const kinematics::Transformation& T_WS,
+                              double sigmaPosition,
+                              double sigmaOrientation);
+
   /// \brief Check Status of GPS observability
   /// \return True if GPS Trafo is observable.
   bool isGpsObservable(){return gpsObservability_;}
@@ -834,6 +845,7 @@ protected:
     PosePrior posePrior; ///< Pose prior.
     SpeedAndBiasPrior speedAndBiasPrior; ///< Speed/bias prior.
     SpeedAndBiasPrior stationaryVelocityPrior; ///< Stationary zero-velocity prior.
+    PosePrior stationaryPosePrior; ///< Stationary no-motion pose prior.
     std::vector<ExtrinsicsPrior> extrinsicsPriors; ///< Extrinsics prior.
     std::map<StateId, TwoPoseLink> twoPoseLinks; ///< All pose graph edges.
     std::map<StateId, TwoPoseConstLink> twoPoseConstLinks; ///< All pose graph edges (const).

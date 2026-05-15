@@ -76,26 +76,17 @@ bool ViSlamBackend::addStationaryConstraint(StateId id, StateId referenceId,
   // Add/update only on the realtime graph; these are local soft constraints and will
   // naturally disappear as the involved states leave the realtime window.
   bool success = realtimeGraph_.addStationaryVelocityPrior(id, sigmaV);
-  if (!referenceId.isInitialised() || referenceId == id ||
-      !realtimeGraph_.findStateId(referenceId) || !realtimeGraph_.findStateId(id)) {
+  if (!realtimeGraph_.findStateId(id)) {
     return success;
   }
 
-  ViGraph::State& referenceState = realtimeGraph_.states_.at(referenceId);
-  if (referenceState.relativePoseLinks.count(id)) {
-    return success;
-  }
-
-  const double safeSigmaPosition = std::max(1e-6, sigmaPosition);
-  const double safeSigmaOrientation = std::max(1e-6, sigmaOrientation);
-  Eigen::Matrix<double, 6, 6> information;
-  information.setZero();
-  information.topLeftCorner<3, 3>() =
-      Eigen::Matrix3d::Identity() / (safeSigmaPosition * safeSigmaPosition);
-  information.bottomRightCorner<3, 3>() =
-      Eigen::Matrix3d::Identity() / (safeSigmaOrientation * safeSigmaOrientation);
-  success &= realtimeGraph_.addRelativePoseConstraint(
-      referenceId, id, kinematics::Transformation::Identity(), information);
+  const StateId poseReferenceId =
+      (referenceId.isInitialised() && realtimeGraph_.findStateId(referenceId))
+          ? referenceId : id;
+  const kinematics::Transformation T_WS_stationary =
+      realtimeGraph_.states_.at(poseReferenceId).pose->estimate();
+  success &= realtimeGraph_.addStationaryPosePrior(
+      id, T_WS_stationary, sigmaPosition, sigmaOrientation);
   return success;
 }
 
@@ -244,6 +235,18 @@ bool ViSlamBackend::tryGpsAlignment(){
         LOG(WARNING) << "[GPS] Rejecting full GPS LC: correction too large ("
                      << translationCorrection << " m > " << maxCorrection
                      << " m), likely bad re-init estimate";
+        realtimeGraph_.removeReInitGpsFactors();
+        fullGraph_.removeReInitGpsFactors();
+        realtimeGraph_.resetFullGpsAlignment();
+        fullGraph_.resetFullGpsAlignment();
+        return false;
+      }
+      const double maxYawCorrection = realtimeGraph_.gpsParametersVec_.back().gpsMaxYawCorrection;
+      if(maxYawCorrection > 0.0 && rotationCorrection > maxYawCorrection * M_PI / 180.0) {
+        LOG(WARNING) << "[GPS] Rejecting full GPS LC: yaw correction too large ("
+                     << rotationCorrection * 180.0 / M_PI
+                     << " deg > " << maxYawCorrection
+                     << " deg), likely bad re-init estimate";
         realtimeGraph_.removeReInitGpsFactors();
         fullGraph_.removeReInitGpsFactors();
         realtimeGraph_.resetFullGpsAlignment();
@@ -1223,7 +1226,8 @@ bool ViSlamBackend::setExtrinsics(StateId id, uchar camIdx,
 
 bool ViSlamBackend::isInImuWindow(StateId id) const
 {
-  return auxiliaryStates_.at(id).isImuFrame;
+  const auto iter = auxiliaryStates_.find(id);
+  return iter != auxiliaryStates_.end() && iter->second.isImuFrame;
 }
 
 Time ViSlamBackend::timestamp(StateId id) const

@@ -127,8 +127,13 @@ private:
 
   double maxHErr_ = std::numeric_limits<double>::max(); ///< Max horizontal error threshold [m]
   double maxVErr_ = std::numeric_limits<double>::max(); ///< Max vertical error threshold [m]
+  double maxGpsSpeed_ = std::numeric_limits<double>::max(); ///< Max horizontal GPS speed threshold [m/s]
   int minFixStatus_ = 0; ///< Minimum fix_status (0=disabled, 1=reject status=0)
   uint64_t lastGpsNs_ = 0; ///< Timestamp of last accepted GPS measurement [ns], for burst-duplicate filtering
+  bool lastCartesianGpsValid_ = false; ///< True once a cartesian GPS point has passed reader-side filters.
+  Eigen::Vector3d lastCartesianGpsPosition_ = Eigen::Vector3d::Zero(); ///< Last accepted cartesian GPS position [m].
+  bool lastGeodeticGpsValid_ = false; ///< True once a geodetic GPS point has passed reader-side filters.
+  Eigen::Vector3d lastGeodeticGpsPosition_ = Eigen::Vector3d::Zero(); ///< Last accepted geodetic GPS point [lat deg, lon deg, alt m].
   std::unique_ptr<GeographicLib::Geoid> geoid_; ///< Geoid model for ellipsoidal->orthometric correction
 
   // DEM-GPS integration

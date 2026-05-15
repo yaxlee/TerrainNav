@@ -16,6 +16,8 @@
  * @author Simon Boche
  */
 
+#include <algorithm>
+#include <cmath>
 #include <sstream>
 
 #include <opencv2/core/core.hpp>
@@ -25,6 +27,22 @@
 #include <okvis/XDatasetReader.hpp>
 
 namespace okvis {
+namespace {
+double horizontalGeodeticDistanceMeters(double lat0, double lon0,
+                                        double lat1, double lon1) {
+  static constexpr double kEarthRadiusMeters = 6378137.0;
+  static constexpr double kDegToRad = 0.017453292519943295;
+  const double phi0 = lat0 * kDegToRad;
+  const double phi1 = lat1 * kDegToRad;
+  const double dphi = (lat1 - lat0) * kDegToRad;
+  const double dlambda = (lon1 - lon0) * kDegToRad;
+  const double sinDphi = std::sin(0.5 * dphi);
+  const double sinDlambda = std::sin(0.5 * dlambda);
+  const double a = sinDphi * sinDphi +
+                   std::cos(phi0) * std::cos(phi1) * sinDlambda * sinDlambda;
+  return 2.0 * kEarthRadiusMeters * std::atan2(std::sqrt(a), std::sqrt(std::max(0.0, 1.0 - a)));
+}
+}
 
 XDatasetReader::XDatasetReader(const std::string & path,
                              const Duration & deltaT, ViParameters parameters, bool use_lidar,
@@ -38,6 +56,7 @@ XDatasetReader::XDatasetReader(const std::string & path,
                       "Unknown GPS data type specified")
     maxHErr_ = (*parameters.gps).maxHErr;
     maxVErr_ = (*parameters.gps).maxVErr;
+    maxGpsSpeed_ = (*parameters.gps).gpsMaxSpeed;
     minFixStatus_ = (*parameters.gps).minFixStatus;
     const std::string& geoidModel = (*parameters.gps).geoidModel;
     if (!geoidModel.empty()) {
@@ -481,7 +500,8 @@ void  XDatasetReader::processing() {
             // Filter burst-duplicate measurements (GPS receiver outputs stale buffered
             // fixes after a dropout gap, all within a few ms with impossible velocities).
             static constexpr uint64_t kMinGpsIntervalNs = 100000000ULL; // 0.1s
-            if (lastGpsNs_ > 0 && gnanoseconds - lastGpsNs_ < kMinGpsIntervalNs) {
+            if (lastGpsNs_ > 0 && gnanoseconds > lastGpsNs_ &&
+                gnanoseconds - lastGpsNs_ < kMinGpsIntervalNs) {
               LOG(WARNING) << "[GPS filter] Burst duplicate dropped: dt="
                            << (gnanoseconds - lastGpsNs_) / 1e6 << "ms < 100ms";
               t_gps_.fromNSec(gnanoseconds);
@@ -500,7 +520,25 @@ void  XDatasetReader::processing() {
               err[j] = std::stof(gs);
             }
 
+            if (maxGpsSpeed_ > 0.0 && lastCartesianGpsValid_ &&
+                lastGpsNs_ > 0 && gnanoseconds > lastGpsNs_) {
+              const double dt = static_cast<double>(gnanoseconds - lastGpsNs_) * 1.0e-9;
+              const double horizontalDistance =
+                  (pos.head<2>() - lastCartesianGpsPosition_.head<2>()).norm();
+              const double speed = horizontalDistance / dt;
+              if (speed > maxGpsSpeed_) {
+                LOG(WARNING) << "[GPS filter] Cartesian GPS speed jump rejected: speed="
+                             << speed << " m/s > max=" << maxGpsSpeed_
+                             << " m/s, distance=" << horizontalDistance
+                             << " m, dt=" << dt << " s, t=" << gnanoseconds;
+                t_gps_.fromNSec(gnanoseconds);
+                continue;
+              }
+            }
+
             lastGpsNs_ = gnanoseconds;
+            lastCartesianGpsPosition_ = pos;
+            lastCartesianGpsValid_ = true;
             t_gps_.fromNSec(gnanoseconds);
 
             // add the GPS measurement for (blocking) processing
@@ -578,12 +616,31 @@ void  XDatasetReader::processing() {
               continue;
             }
 
+            if (maxGpsSpeed_ > 0.0 && lastGeodeticGpsValid_ &&
+                lastGpsNs_ > 0 && gnanoseconds > lastGpsNs_) {
+              const double dt = static_cast<double>(gnanoseconds - lastGpsNs_) * 1.0e-9;
+              const double horizontalDistance = horizontalGeodeticDistanceMeters(
+                  lastGeodeticGpsPosition_[0], lastGeodeticGpsPosition_[1], lat, lon);
+              const double speed = horizontalDistance / dt;
+              if (speed > maxGpsSpeed_) {
+                LOG(WARNING) << "[GPS filter] Geodetic GPS speed jump rejected: speed="
+                             << speed << " m/s > max=" << maxGpsSpeed_
+                             << " m/s, distance=" << horizontalDistance
+                             << " m, dt=" << dt << " s, t=" << gnanoseconds;
+                t_gps_.fromNSec(gnanoseconds);
+                continue;
+              }
+            }
+
             // apply geoid undulation correction: convert ellipsoidal -> orthometric height
             if (geoid_) {
               alt -= (*geoid_)(lat, lon);
             }
 
             t_gps_.fromNSec(gnanoseconds);
+            lastGpsNs_ = gnanoseconds;
+            lastGeodeticGpsPosition_ = Eigen::Vector3d(lat, lon, alt);
+            lastGeodeticGpsValid_ = true;
 
             // add the GPS measurement for (blocking) processing
             if (t_gps_ - start + okvis::Duration(1.0) > deltaT_) {
@@ -638,12 +695,31 @@ void  XDatasetReader::processing() {
               continue;
             }
 
+            if (maxGpsSpeed_ > 0.0 && lastGeodeticGpsValid_ &&
+                lastGpsNs_ > 0 && gnanoseconds > lastGpsNs_) {
+              const double dt = static_cast<double>(gnanoseconds - lastGpsNs_) * 1.0e-9;
+              const double horizontalDistance = horizontalGeodeticDistanceMeters(
+                  lastGeodeticGpsPosition_[0], lastGeodeticGpsPosition_[1], lat, lon);
+              const double speed = horizontalDistance / dt;
+              if (speed > maxGpsSpeed_) {
+                LOG(WARNING) << "[GPS filter] Leica GPS speed jump rejected: speed="
+                             << speed << " m/s > max=" << maxGpsSpeed_
+                             << " m/s, distance=" << horizontalDistance
+                             << " m, dt=" << dt << " s, t=" << gnanoseconds;
+                t_gps_.fromNSec(gnanoseconds);
+                continue;
+              }
+            }
+
             // apply geoid undulation correction: convert ellipsoidal -> orthometric height
             if (geoid_) {
               alt -= (*geoid_)(lat, lon);
             }
 
             t_gps_.fromNSec(gnanoseconds);
+            lastGpsNs_ = gnanoseconds;
+            lastGeodeticGpsPosition_ = Eigen::Vector3d(lat, lon, alt);
+            lastGeodeticGpsValid_ = true;
 
             // add the GPS measurement for (blocking) processing
             if (t_gps_ - start + okvis::Duration(1.0) > deltaT_) {

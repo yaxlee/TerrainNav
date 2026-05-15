@@ -161,10 +161,14 @@ struct GpsParameters {
     double yawErrorThreshold; /// < Threshold on maximum estimated yaw error [degree] for initialization
     bool robustGpsInit; /// < Flag if robust initialization is needed (low-grade GPS sensor)
     double gpsSigmaScale; ///< Multiplier on GPS sigmas inside the optimizer (>1 reduces weight, slows correction)
+    double gpsLossScale; ///< Cauchy robust loss scale for GPS factors [m]; <=0 disables robust loss.
     double gpsOutlierScale; ///< Multiplier on the 3-sigma outlier rejection threshold (>1 relaxes rejection, useful for fast platforms with tight reported sigmas)
     double gpsDropoutThreshold; ///< Minimum VIO time [s] since last GPS state before re-init is triggered (prevents false re-init after GPS loop closure)
     double gpsMaxCorrection; ///< Maximum allowed T_GW translation correction [m] for GPS loop closure; larger corrections are rejected as likely bad Umeyama estimates
+    double gpsMaxYawCorrection; ///< Maximum allowed T_GW yaw correction [deg] for GPS loop closure (<=0 disables).
     int gpsMinInitPoints; ///< Minimum number of GPS points required for Umeyama alignment (higher = more robust, especially during sharp turns)
+    int gpsMinReInitPoints; ///< Minimum GPS points required for re-initialization after GPS dropout.
+    double gpsMaxSpeed; ///< Maximum accepted GPS horizontal speed [m/s] between consecutive accepted reader-side measurements (<=0 disables)
 
     double maxHErr; ///< Maximum horizontal error [m] for GPS bad-point filtering (reader-side)
     double maxVErr; ///< Maximum vertical error [m] for GPS bad-point filtering (reader-side)
@@ -174,8 +178,12 @@ struct GpsParameters {
     /// Default Constructor (no GPS)
     GpsParameters() : type("none"), r_SA(Eigen::Vector3d(0., 0., 0.)),
                       yawErrorThreshold(0.), robustGpsInit(false),
-                      gpsSigmaScale(1.0), gpsOutlierScale(1.0),
-                      gpsDropoutThreshold(3.0), gpsMaxCorrection(50.0), gpsMinInitPoints(10),
+                      gpsSigmaScale(1.0), gpsLossScale(3.0), gpsOutlierScale(1.0),
+                      gpsDropoutThreshold(3.0),
+                      gpsMaxCorrection(50.0), gpsMaxYawCorrection(0.0),
+                      gpsMinInitPoints(10),
+                      gpsMinReInitPoints(10),
+                      gpsMaxSpeed(1e9),
                       maxHErr(1e9), maxVErr(1e9), minFixStatus(0), geoidModel("")
                       {}
 };

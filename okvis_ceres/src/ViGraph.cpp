@@ -272,6 +272,13 @@ int ViGraph::addGps(const GpsParameters& gpsParameters) {
     return -1;
   }
   gpsParametersVec_.push_back(gpsParameters);
+  if(gpsParameters.gpsLossScale > 0.0) {
+    cauchyGpsLossFunctionPtr_.reset(new ::ceres::CauchyLoss(gpsParameters.gpsLossScale));
+    LOG(INFO) << "[GPS] Using Cauchy loss scale " << gpsParameters.gpsLossScale << " m for GPS factors.";
+  } else {
+    cauchyGpsLossFunctionPtr_.reset();
+    LOG(INFO) << "[GPS] GPS robust loss disabled.";
+  }
   return static_cast<int>(gpsParametersVec_.size()) - 1;
 }
 
@@ -1198,9 +1205,13 @@ bool ViGraph::checkForGpsInit(okvis::kinematics::Transformation& T_GW, std::set<
     }
   }
 
-  // Need minimum points for Umeyama to be well-conditioned
-  const size_t minPoints = static_cast<size_t>(
-      std::max(3, gpsParametersVec_.back().gpsMinInitPoints));
+  // Need minimum points for Umeyama to be well-conditioned. Use a separate,
+  // usually stricter threshold for post-dropout re-initialisation.
+  const int configuredMinPoints =
+      (gpsStatus_ == gpsStatus::ReInitialising)
+          ? gpsParametersVec_.back().gpsMinReInitPoints
+          : gpsParametersVec_.back().gpsMinInitPoints;
+  const size_t minPoints = static_cast<size_t>(std::max(3, configuredMinPoints));
   if(gpsPoints.size() < minPoints){
     LOG(INFO) << "[GPS Init] Waiting: only " << gpsPoints.size()
               << " GPS points collected (need >= " << minPoints << ")";
@@ -1288,7 +1299,6 @@ bool ViGraph::checkForGpsInit(okvis::kinematics::Transformation& T_GW, std::set<
   if(yaw_error) {
     *yaw_error = yawUncertainty;
   }
-
 
   if(yawUncertainty < gpsParametersVec_.back().yawErrorThreshold){
 
@@ -2199,6 +2209,29 @@ bool ViGraph::addStationaryVelocityPrior(StateId stateId, double sigmaV) {
   );
   state.stationaryVelocityPrior.residualBlockId = problem_->AddResidualBlock(
       state.stationaryVelocityPrior.errorTerm.get(), nullptr, state.speedAndBias->parameters());
+  return true;
+}
+
+bool ViGraph::addStationaryPosePrior(StateId stateId,
+                                     const kinematics::Transformation& T_WS,
+                                     double sigmaPosition,
+                                     double sigmaOrientation) {
+  if (!states_.count(stateId)) return false;
+  State& state = states_.at(stateId);
+
+  if (state.stationaryPosePrior.residualBlockId) {
+    problem_->RemoveResidualBlock(state.stationaryPosePrior.residualBlockId);
+    state.stationaryPosePrior.residualBlockId = nullptr;
+    state.stationaryPosePrior.errorTerm.reset();
+  }
+
+  const double safeSigmaPosition = std::max(1e-6, sigmaPosition);
+  const double safeSigmaOrientation = std::max(1e-6, sigmaOrientation);
+  state.stationaryPosePrior.errorTerm = std::make_shared<ceres::PoseError>(
+      T_WS, safeSigmaPosition * safeSigmaPosition,
+      safeSigmaOrientation * safeSigmaOrientation);
+  state.stationaryPosePrior.residualBlockId = problem_->AddResidualBlock(
+      state.stationaryPosePrior.errorTerm.get(), nullptr, state.pose->parameters());
   return true;
 }
 

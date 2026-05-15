@@ -424,6 +424,7 @@ private:
   bool visualStationaryActive_ = false;          ///< Whether visual stationarity constraints are active.
   int visualStationaryEntryCount_ = 0;           ///< Consecutive visually-stationary frames.
   int visualStationaryExitCount_ = 0;            ///< Consecutive visually-moving frames.
+  int visualStationaryInvalidCount_ = 0;         ///< Consecutive frames without enough repeated landmarks.
   StateId visualStationaryAnchorId_;             ///< Anchor state for no-motion relative pose constraints.
   VisualObservationMap previousVisualObservations_; ///< Previous frame's 3D-landmark pixel observations.
 

@@ -145,8 +145,13 @@ namespace okvis {
         std::unique_ptr<GeographicLib::Geoid> geoid_; ///< Geoid undulation model for ellipsoidal->orthometric correction
         double maxHErr_ = 1e9; ///< GPS horizontal error filter threshold [m]
         double maxVErr_ = 1e9; ///< GPS vertical error filter threshold [m]
+        double maxGpsSpeed_ = 1e9; ///< Max horizontal GPS speed threshold [m/s]
         int minFixStatus_ = 0; ///< Minimum fix_status to accept (0=no filter)
         uint64_t lastGpsNs_ = 0; ///< Timestamp of last accepted GPS measurement [ns], for burst-duplicate filtering
+        bool lastCartesianGpsValid_ = false; ///< True once a cartesian GPS point has passed reader-side filters.
+        Eigen::Vector3d lastCartesianGpsPosition_ = Eigen::Vector3d::Zero(); ///< Last accepted cartesian GPS position [m].
+        bool lastGeodeticGpsValid_ = false; ///< True once a geodetic GPS point has passed reader-side filters.
+        Eigen::Vector3d lastGeodeticGpsPosition_ = Eigen::Vector3d::Zero(); ///< Last accepted geodetic GPS point [lat deg, lon deg, alt m].
 
     };
 

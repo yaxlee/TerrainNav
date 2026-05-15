@@ -71,16 +71,16 @@ frontend_parameters:
 
 stationary_parameters:
     enabled: true
-    entry_frames: 5
-    exit_frames: 3
-    min_landmarks: 20
+    entry_frames: 20
+    exit_frames: 10
+    min_landmarks: 40
     max_median_pixel_displacement: 0.45
     max_mean_pixel_displacement: 0.90
     sigma_v: 0.02
     sigma_position: 0.03
     sigma_orientation: 0.01
 
-estimator_parameters: 
+estimator_parameters: #11/11/20
     num_keyframes: 11 # number of keyframes in optimisation window
     num_loop_closure_frames: 5 # number of loop closure frames in optimisation window
     num_imu_frames: 11 # number of frames linked by most recent nonlinear IMU error terms
@@ -88,7 +88,7 @@ estimator_parameters:
     do_final_ba: false # Whether to run a full final BA
     enforce_realtime: false # whether to limit the time budget for optimisation
     realtime_min_iterations: 2 # minimum number of iterations always performed
-    realtime_max_iterations: 20 # never do more than these, even if not converged
+    realtime_max_iterations: 15 # never do more than these, even if not converged
     realtime_time_limit: 0.025 # time budget for realtime optimisation [s]
     realtime_num_threads: 4 # number of threads for the realtime optimisation
     full_graph_iterations: 5 # don't do more than these for the full (background) optimisation
@@ -107,20 +107,27 @@ gps_parameters:
   r_SA: [0.0, 0.0, 0.0]
   yaw_error_threshold: 5.0
   robust_gps_init: false
-  gps_sigma_scale: 3.0
-  gps_outlier_scale: 3.0  # Multiplier on 3-sigma rejection threshold (1.0=6m, 3.0=18m for sigma=2m)
-  gps_dropout_threshold: 10.0  # [s] Min VIO time since last GPS state before re-init triggers (prevents false re-init after GPS loop closure)
-  gps_max_correction: 100.0  # [m] Max T_GW translation correction allowed; larger corrections are rejected as bad Umeyama estimates
-  gps_min_init_points:3  # Min GPS points for Umeyama alignment (>=3 always enforced; higher = more robust against sharp-turn corrupted estimates)
+  gps_sigma_scale: 1.0
+  gps_loss_scale: 10.0  # [m] Cauchy loss scale for GPS factors; larger pulls back faster, <=0 disables robust loss
+  gps_outlier_scale: 1.0  # Multiplier on 3-sigma rejection threshold (1.0=6m, 3.0=18m for sigma=2m)
+  gps_dropout_threshold: 12.0  # [s] Min VIO time since last GPS state before re-init triggers (prevents false re-init after GPS loop closure)
+  gps_max_correction: 5.0  # [m] Max T_GW correction allowed for GPS re-init loop closures
+  gps_max_yaw_correction: 1.5  # [deg] Max yaw change allowed for GPS re-init loop closures; <=0 disables
+  gps_min_init_points: 6  # Min GPS points for Umeyama alignment (higher = more robust against city multipath)
+  gps_min_reinit_points: 20  # Min GPS points for post-dropout re-init alignment
+  gps_max_speed: 20.0  # [m/s] Reject GPS jumps requiring impossible horizontal speed; <=0 disables
   max_h_err: 20.0      # [m] Reject GPS if horizontal error exceeds this
   max_v_err: 80.0      # [m] Reject GPS if vertical error exceeds this
   min_fix_status: 1    # Reject GPS if fix_status < this (0=no filter, 1=reject status 0)
   geoid_model: "egm96-5"  # GeographicLib geoid model for ellipsoidal->orthometric height correction
 
+  #归根到底需要加强普通gps factor的约束力，而不是直接position only alignment
+
+
 # dem_parameters:
 #   use: true
-#   sigma_h: 1
-#   d_above_ground: 2
+#   sigma_h: 1.0
+#   d_above_ground: 2.13
 #   r_SA: [0, 0, 0]
-#   use_dem_height_for_gps: false
+#   use_dem_height_for_gps: true
 #   dem_fusion_alpha: 0.5   # GPS weight in altitude fusion: 0=full DEM, 1=full GPS

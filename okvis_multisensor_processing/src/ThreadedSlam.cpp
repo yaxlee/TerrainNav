@@ -475,6 +475,7 @@ void ThreadedSlam::updateVisualStationarity(const okvis::MultiFramePtr& multiFra
     visualStationaryActive_ = false;
     visualStationaryEntryCount_ = 0;
     visualStationaryExitCount_ = 0;
+    visualStationaryInvalidCount_ = 0;
     visualStationaryAnchorId_ = StateId();
     return;
   }
@@ -487,18 +488,37 @@ void ThreadedSlam::updateVisualStationarity(const okvis::MultiFramePtr& multiFra
       stats.medianPixelDisplacement <= parameters_.stationary.max_median_pixel_displacement &&
       stats.meanPixelDisplacement <= parameters_.stationary.max_mean_pixel_displacement;
 
-  if (visuallyStationary) {
+  const int entryFrames = std::max(1, parameters_.stationary.entry_frames);
+  const int exitFrames = std::max(1, parameters_.stationary.exit_frames);
+
+  if (!stats.valid) {
+    ++visualStationaryInvalidCount_;
+    visualStationaryExitCount_ = 0;
+    if (!visualStationaryActive_ && visualStationaryInvalidCount_ > exitFrames &&
+        visualStationaryEntryCount_ > 0) {
+      --visualStationaryEntryCount_;
+    }
+    if (visualStationaryEntryCount_ > 0 &&
+        (visualStationaryInvalidCount_ == 1 || visualStationaryInvalidCount_ % 10 == 0)) {
+      LOG(INFO) << "Visual stationary: waiting through weak tracking at state "
+                << multiFrame->id() << " with only " << stats.numMatches
+                << " repeated 3D landmarks (need "
+                << parameters_.stationary.min_landmarks
+                << "), entry count=" << visualStationaryEntryCount_
+                << "/" << entryFrames;
+    }
+  } else if (visuallyStationary) {
+    visualStationaryInvalidCount_ = 0;
     ++visualStationaryEntryCount_;
     visualStationaryExitCount_ = 0;
   } else {
+    visualStationaryInvalidCount_ = 0;
     visualStationaryEntryCount_ = 0;
     if (visualStationaryActive_) {
       ++visualStationaryExitCount_;
     }
   }
 
-  const int entryFrames = std::max(1, parameters_.stationary.entry_frames);
-  const int exitFrames = std::max(1, parameters_.stationary.exit_frames);
   const StateId currentId(multiFrame->id());
 
   if (!visualStationaryActive_ && visualStationaryEntryCount_ >= entryFrames) {
