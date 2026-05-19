@@ -386,6 +386,8 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
              viParameters_.stationary.sigma_position);
   parseEntry(file["stationary_parameters"], "sigma_orientation",
              viParameters_.stationary.sigma_orientation);
+  parseEntry(file["stationary_parameters"], "gps_recovery_pause_after_exit_frames",
+             viParameters_.stationary.gps_recovery_pause_after_exit_frames);
 
   // Some options for how and what to output.
   parseEntry(file["output_parameters"], "display_topview",
@@ -723,6 +725,40 @@ bool ViParametersReader::getGpsCalibration(const cv::FileNode& calibrationNode, 
              gpsParameters.gpsOutlierScale);
   parseEntry(calibrationNode, "gps_dropout_threshold",
              gpsParameters.gpsDropoutThreshold);
+  parseEntry(calibrationNode, "gps_enable_reinit",
+             gpsParameters.gpsEnableReInit);
+  parseEntry(calibrationNode, "gps_velocity_sigma",
+             gpsParameters.gpsVelocitySigma);
+  parseEntry(calibrationNode, "gps_velocity_min_dt",
+             gpsParameters.gpsVelocityMinDt);
+  parseEntry(calibrationNode, "gps_velocity_max_dt",
+             gpsParameters.gpsVelocityMaxDt);
+  parseEntry(calibrationNode, "gps_reinit_position_sigma_scale",
+             gpsParameters.gpsReinitPositionSigmaScale);
+  parseEntry(calibrationNode, "gps_reinit_position_loss_scale",
+             gpsParameters.gpsReinitPositionLossScale);
+  parseEntry(calibrationNode, "gps_enable_legacy_position_alignment",
+             gpsParameters.gpsEnableLegacyPositionAlignment);
+  parseEntry(calibrationNode, "gps_bounded_recovery_enabled",
+             gpsParameters.gpsBoundedRecoveryEnabled);
+  parseEntry(calibrationNode, "gps_bounded_recovery_residual_threshold",
+             gpsParameters.gpsBoundedRecoveryResidualThreshold);
+  parseEntry(calibrationNode, "gps_bounded_recovery_exit_threshold",
+             gpsParameters.gpsBoundedRecoveryExitThreshold);
+  parseEntry(calibrationNode, "gps_bounded_recovery_consecutive",
+             gpsParameters.gpsBoundedRecoveryConsecutive);
+  parseEntry(calibrationNode, "gps_bounded_recovery_max_step",
+             gpsParameters.gpsBoundedRecoveryMaxStep);
+  parseEntry(calibrationNode, "gps_bounded_recovery_max_total",
+             gpsParameters.gpsBoundedRecoveryMaxTotal);
+  parseEntry(calibrationNode, "gps_bounded_recovery_horizontal_only",
+             gpsParameters.gpsBoundedRecoveryHorizontalOnly);
+  parseEntry(calibrationNode, "gps_bounded_recovery_apply_in_initialised",
+             gpsParameters.gpsBoundedRecoveryApplyInInitialised);
+  parseEntry(calibrationNode, "gps_bounded_recovery_apply_in_reinitialising",
+             gpsParameters.gpsBoundedRecoveryApplyInReInitialising);
+  parseEntry(calibrationNode, "gps_bounded_recovery_stationary_speed_threshold",
+             gpsParameters.gpsBoundedRecoveryStationarySpeedThreshold);
   parseEntry(calibrationNode, "gps_max_correction",
              gpsParameters.gpsMaxCorrection);
   parseEntry(calibrationNode, "gps_max_yaw_correction",

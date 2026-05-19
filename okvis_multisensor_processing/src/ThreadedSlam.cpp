@@ -43,6 +43,8 @@ static const int cameraInputQueueSize = 2;
 
 // overlap of imu data before and after two consecutive frames [seconds]:
 static const double imuTemporalOverlap = 0.02;
+static const char kLogRed[] = "\033[31m";
+static const char kLogReset[] = "\033[0m";
 
 
 // Constructor.
@@ -344,7 +346,6 @@ bool ThreadedSlam::addDepthMeasurement(const okvis::Time &stamp,
   return true;
 }
 
-// Add a GPS measurement.
 bool ThreadedSlam::addGpsMeasurement(const okvis::Time& stamp,
                                      const Eigen::Vector3d& pos,
                                      const Eigen::Vector3d& err)
@@ -476,7 +477,9 @@ void ThreadedSlam::updateVisualStationarity(const okvis::MultiFramePtr& multiFra
     visualStationaryEntryCount_ = 0;
     visualStationaryExitCount_ = 0;
     visualStationaryInvalidCount_ = 0;
+    visualStationaryRecoveryPauseCount_ = 0;
     visualStationaryAnchorId_ = StateId();
+    estimator_.setGpsBoundedRecoveryPausedByStationary(false);
     return;
   }
 
@@ -521,33 +524,79 @@ void ThreadedSlam::updateVisualStationarity(const okvis::MultiFramePtr& multiFra
 
   const StateId currentId(multiFrame->id());
 
-  if (!visualStationaryActive_ && visualStationaryEntryCount_ >= entryFrames) {
+  if (currentId.value() % 300 == 0) {
+    LOG(INFO) << "Visual stationary diag at state " << currentId.value()
+              << ": valid=" << stats.valid
+              << ", repeated 3D landmarks=" << stats.numMatches
+              << "/" << parameters_.stationary.min_landmarks
+              << ", median pixel motion=" << stats.medianPixelDisplacement
+              << " (max " << parameters_.stationary.max_median_pixel_displacement
+              << "), mean pixel motion=" << stats.meanPixelDisplacement
+              << " (max " << parameters_.stationary.max_mean_pixel_displacement
+              << "), visually_stationary=" << visuallyStationary
+              << ", active=" << visualStationaryActive_
+              << ", entry=" << visualStationaryEntryCount_
+              << "/" << entryFrames
+              << ", exit=" << visualStationaryExitCount_
+              << "/" << exitFrames
+              << ", invalid=" << visualStationaryInvalidCount_
+              << ", recovery_pause=" << visualStationaryRecoveryPauseCount_;
+  }
+
+  const bool holdStationaryThroughWeakTracking =
+      !stats.valid && visualStationaryEntryCount_ >= entryFrames;
+
+  const bool visualEntryReady = visualStationaryEntryCount_ >= entryFrames;
+  if (!visualStationaryActive_ && visualEntryReady) {
     visualStationaryActive_ = true;
     visualStationaryExitCount_ = 0;
     visualStationaryAnchorId_ = currentId;
-    LOG(INFO) << "Visual stationary: entered at state " << currentId.value()
+    LOG(INFO) << kLogRed << "Visual stationary: entered at state " << currentId.value()
               << " using " << stats.numMatches << " repeated 3D landmarks"
               << ", median pixel motion=" << stats.medianPixelDisplacement
-              << ", mean pixel motion=" << stats.meanPixelDisplacement;
+              << ", mean pixel motion=" << stats.meanPixelDisplacement
+              << kLogReset;
   }
 
   if (visualStationaryActive_ && visualStationaryExitCount_ >= exitFrames) {
-    LOG(INFO) << "Visual stationary: exited at state " << currentId.value();
+    visualStationaryRecoveryPauseCount_ =
+        std::max(0, parameters_.stationary.gps_recovery_pause_after_exit_frames);
+    LOG(INFO) << kLogRed << "Visual stationary: exited at state " << currentId.value()
+              << ", keeping GPS bounded recovery paused for "
+              << visualStationaryRecoveryPauseCount_ << " frame(s)."
+              << kLogReset;
     visualStationaryActive_ = false;
     visualStationaryEntryCount_ = 0;
     visualStationaryExitCount_ = 0;
     visualStationaryAnchorId_ = StateId();
   }
 
-  if (visualStationaryActive_ && visuallyStationary) {
+  if (visualStationaryActive_ &&
+      (visuallyStationary || holdStationaryThroughWeakTracking)) {
     if (!visualStationaryAnchorId_.isInitialised() ||
         !estimator_.isInImuWindow(visualStationaryAnchorId_)) {
       visualStationaryAnchorId_ = currentId;
+    }
+    if (holdStationaryThroughWeakTracking &&
+        (visualStationaryInvalidCount_ == 1 ||
+         visualStationaryInvalidCount_ % 10 == 0)) {
+      LOG(INFO) << "Visual stationary: holding constraint through weak tracking at state "
+                << currentId.value() << " with entry count="
+                << visualStationaryEntryCount_ << "/" << entryFrames
+                << ", invalid=" << visualStationaryInvalidCount_;
     }
     estimator_.addStationaryConstraint(
         currentId, visualStationaryAnchorId_, parameters_.stationary.sigma_v,
         parameters_.stationary.sigma_position,
         parameters_.stationary.sigma_orientation);
+  }
+
+  const bool pauseGpsBoundedRecovery =
+      visualStationaryActive_ || visualStationaryRecoveryPauseCount_ > 0;
+  estimator_.setGpsBoundedRecoveryPausedByStationary(pauseGpsBoundedRecovery);
+  if(!visualStationaryActive_ && visualStationaryEntryCount_ == 0 &&
+     visualStationaryRecoveryPauseCount_ > 0) {
+    --visualStationaryRecoveryPauseCount_;
   }
 
   previousVisualObservations_.swap(currentObservations);

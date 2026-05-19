@@ -164,6 +164,23 @@ struct GpsParameters {
     double gpsLossScale; ///< Cauchy robust loss scale for GPS factors [m]; <=0 disables robust loss.
     double gpsOutlierScale; ///< Multiplier on the 3-sigma outlier rejection threshold (>1 relaxes rejection, useful for fast platforms with tight reported sigmas)
     double gpsDropoutThreshold; ///< Minimum VIO time [s] since last GPS state before re-init is triggered (prevents false re-init after GPS loop closure)
+    bool gpsEnableReInit; ///< Enable post-initialisation GPS T_GW re-initialisation after dropout.
+    double gpsVelocitySigma; ///< Horizontal GPS-derived velocity prior sigma [m/s] (<=0 disables).
+    double gpsVelocityMinDt; ///< Minimum GPS time delta [s] for velocity prior.
+    double gpsVelocityMaxDt; ///< Maximum GPS time delta [s] for velocity prior.
+    double gpsReinitPositionSigmaScale; ///< Additional sigma scale for weak GPS position factors during ReInitialising (<=0 disables).
+    double gpsReinitPositionLossScale; ///< Cauchy loss scale for weak ReInitialising GPS position factors [m]; <=0 disables robust loss.
+    bool gpsEnableLegacyPositionAlignment; ///< Enable old dropout/re-init position-only alignment path.
+    bool gpsBoundedRecoveryEnabled; ///< Enable small bounded GPS residual corrections on the local window.
+    double gpsBoundedRecoveryResidualThreshold; ///< Horizontal GPS/VIO residual [m] above which bounded recovery can start.
+    double gpsBoundedRecoveryExitThreshold; ///< Horizontal residual [m] below which bounded recovery state is reset.
+    int gpsBoundedRecoveryConsecutive; ///< Number of consecutive large residuals before applying bounded correction.
+    double gpsBoundedRecoveryMaxStep; ///< Maximum local-window correction per GPS update [m].
+    double gpsBoundedRecoveryMaxTotal; ///< Maximum accumulated bounded correction distance before residual recovers [m]; <=0 disables the cap.
+    bool gpsBoundedRecoveryHorizontalOnly; ///< Apply only horizontal bounded corrections.
+    bool gpsBoundedRecoveryApplyInInitialised; ///< Allow bounded correction in normal GPS Initialised mode.
+    bool gpsBoundedRecoveryApplyInReInitialising; ///< Allow bounded correction during GPS ReInitialising mode.
+    double gpsBoundedRecoveryStationarySpeedThreshold; ///< Skip bounded recovery when GPS horizontal speed is below this [m/s]; <=0 disables.
     double gpsMaxCorrection; ///< Maximum allowed T_GW translation correction [m] for GPS loop closure; larger corrections are rejected as likely bad Umeyama estimates
     double gpsMaxYawCorrection; ///< Maximum allowed T_GW yaw correction [deg] for GPS loop closure (<=0 disables).
     int gpsMinInitPoints; ///< Minimum number of GPS points required for Umeyama alignment (higher = more robust, especially during sharp turns)
@@ -180,6 +197,23 @@ struct GpsParameters {
                       yawErrorThreshold(0.), robustGpsInit(false),
                       gpsSigmaScale(1.0), gpsLossScale(3.0), gpsOutlierScale(1.0),
                       gpsDropoutThreshold(3.0),
+                      gpsEnableReInit(true),
+                      gpsVelocitySigma(0.0),
+                      gpsVelocityMinDt(0.2),
+                      gpsVelocityMaxDt(5.0),
+                      gpsReinitPositionSigmaScale(5.0),
+                      gpsReinitPositionLossScale(15.0),
+                      gpsEnableLegacyPositionAlignment(false),
+                      gpsBoundedRecoveryEnabled(false),
+                      gpsBoundedRecoveryResidualThreshold(8.0),
+                      gpsBoundedRecoveryExitThreshold(3.0),
+                      gpsBoundedRecoveryConsecutive(2),
+                      gpsBoundedRecoveryMaxStep(0.75),
+                      gpsBoundedRecoveryMaxTotal(30.0),
+                      gpsBoundedRecoveryHorizontalOnly(true),
+                      gpsBoundedRecoveryApplyInInitialised(true),
+                      gpsBoundedRecoveryApplyInReInitialising(true),
+                      gpsBoundedRecoveryStationarySpeedThreshold(0.0),
                       gpsMaxCorrection(50.0), gpsMaxYawCorrection(0.0),
                       gpsMinInitPoints(10),
                       gpsMinReInitPoints(10),
@@ -224,6 +258,7 @@ struct StationaryParameters {
   double sigma_v                       = 0.02;  ///< [m/s] Zero-velocity constraint 1-sigma.
   double sigma_position                = 0.03;  ///< [m] Relative no-motion position constraint 1-sigma.
   double sigma_orientation             = 0.01;  ///< [rad] Relative no-motion orientation constraint 1-sigma.
+  int    gps_recovery_pause_after_exit_frames = 0; ///< Keep GPS bounded recovery paused for this many frames after stationary exit.
 };
 
 struct ViParameters {

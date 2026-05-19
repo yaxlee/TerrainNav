@@ -54,6 +54,7 @@ class ViSlamBackend //: public VioBackendInterface
     isLoopClosureAvailable_ = false;
     components_.resize(1);
     gpsObservability_ = false;
+    fullGraph_.setGpsBoundedRecoveryPoseCorrectionEnabled(false);
   }
 
   /**
@@ -665,7 +666,8 @@ class ViSlamBackend //: public VioBackendInterface
   /// \param gpsLossId Id of the fixed state where last GPS signal is received
   /// \param gpsReturnId Id of the staet where GPS measurements are available again
   /// \return True on success
-  bool attemptPosGpsAlignment(StateId gpsLossId , StateId gpsReturnId, const Eigen::Vector3d& posAlignVec);
+  bool attemptPosGpsAlignment(StateId gpsLossId , StateId gpsReturnId,
+                              const Eigen::Vector3d& posAlignVec);
 
   /// \brief Add a GPS alignment ("GPS loop closure") frame (after successful attempt).
   void addGpsAlignmentFrame(StateId gpsLossFrameId);
@@ -689,6 +691,9 @@ class ViSlamBackend //: public VioBackendInterface
   /// \return True on success.
   bool addStationaryConstraint(StateId id, StateId referenceId, double sigmaV,
                                double sigmaPosition, double sigmaOrientation);
+
+  /// \brief Pause/resume realtime GPS bounded recovery while visual stationarity is active or cooling down.
+  void setGpsBoundedRecoveryPausedByStationary(bool paused);
 
   /// \brief             Add Alignment constraints from submapping interface
   /// @param frame_A_id  ID of frame {A}
@@ -765,6 +770,7 @@ private:
   // underlying graphs;
   ViGraphEstimator realtimeGraph_; ///< The realtime estimator.
   ViGraphEstimator fullGraph_; ///< The full grapf for asynchronous optimisation.
+  bool gpsBoundedRecoveryPausedByStationary_ = false; ///< Visual stationary state currently pauses realtime GPS recovery shifts.
 
   std::atomic_bool needsFullGraphOptimisation_; ///< Do we need a full graph optimisation now?
   std::atomic_bool isLoopClosing_; ///< Is there currently a full graph optimisation running?

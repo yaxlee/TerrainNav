@@ -30,6 +30,7 @@
 #include <vector>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 
 
@@ -234,6 +235,7 @@ ViGraph::ViGraph() : globCartesianFrame_(earth_)
 {
   cauchyLossFunctionPtr_.reset(new ::ceres::CauchyLoss(1.0));
   cauchyGpsLossFunctionPtr_.reset(new ::ceres::CauchyLoss(3.0));
+  cauchyReinitGpsLossFunctionPtr_.reset(new ::ceres::CauchyLoss(15.0));
   tukeyDepthLossFunctionPtr_.reset(new ::ceres::TukeyLoss(0.1));
   tukeyLidarLossFunctionPtr_.reset(new ::ceres::TukeyLoss(2.0));
   ::ceres::Problem::Options problemOptions;
@@ -278,6 +280,16 @@ int ViGraph::addGps(const GpsParameters& gpsParameters) {
   } else {
     cauchyGpsLossFunctionPtr_.reset();
     LOG(INFO) << "[GPS] GPS robust loss disabled.";
+  }
+  if(gpsParameters.gpsReinitPositionLossScale > 0.0) {
+    cauchyReinitGpsLossFunctionPtr_.reset(
+        new ::ceres::CauchyLoss(gpsParameters.gpsReinitPositionLossScale));
+    LOG(INFO) << "[GPS] Using Cauchy loss scale "
+              << gpsParameters.gpsReinitPositionLossScale
+              << " m for weak ReInitialising GPS position factors.";
+  } else {
+    cauchyReinitGpsLossFunctionPtr_.reset();
+    LOG(INFO) << "[GPS] Weak ReInitialising GPS position robust loss disabled.";
   }
   return static_cast<int>(gpsParametersVec_.size()) - 1;
 }
@@ -859,6 +871,8 @@ bool ViGraph::setGpsExtrinsics(const kinematics::TransformationCacheless & T_GW)
 bool ViGraph::needsGpsReInit(){
     if(gpsStates_.empty())
         return false;
+    if(!gpsParametersVec_.back().gpsEnableReInit)
+        return false;
 
     StateId lastGpsStateId;
     lastGpsStateId = *(gpsStates_.rbegin());
@@ -872,15 +886,26 @@ bool ViGraph::needsGpsReInit(){
         gpsDropoutId_ = lastGpsStateId;
         return true;
       }
-    if(gpsStatus_ == gpsStatus::ReInitialising  && states_.lower_bound(positionAlignedId_)->second.pose->fixed()){
-        needsPositionAlignment_ = true;
-        return true;
+    if(gpsStatus_ == gpsStatus::ReInitialising &&
+       gpsParametersVec_.back().gpsEnableLegacyPositionAlignment &&
+       positionAlignedId_.isInitialised()) {
+        auto alignedIter = states_.lower_bound(positionAlignedId_);
+        if(alignedIter != states_.end() && alignedIter->second.pose->fixed()){
+          needsPositionAlignment_ = true;
+          return true;
+        }
       }
 
     return false;
 }
 
 void ViGraph::reInitGpsExtrinsics(){
+
+    if(!gpsParametersVec_.empty() && !gpsParametersVec_.back().gpsEnableReInit){
+      LOG(INFO) << "[GPS] Post-initialisation re-init disabled; staying in current GPS status.";
+      needsPositionAlignment_ = false;
+      return;
+    }
 
     if(gpsStatus_ != gpsStatus::ReInitialising){
       // Only clear when first entering ReInitialising (from Initialised).
@@ -907,12 +932,22 @@ bool ViGraph::needsFullGpsAlignment(StateId& gpsLossId, StateId& gpsAlignId, okv
 
 bool ViGraph::needsPosGpsAlignment(StateId& gpsLossId, StateId& gpsAlignId, Eigen::Vector3d& posError){
 
+    (void)gpsLossId;
+    (void)gpsAlignId;
+    (void)posError;
+
     // For low-grade GPS sensors where robust gps initialization is needed, we should not do a Position-Only Alignment
     if(gpsParametersVec_.back().robustGpsInit){
         return false;
     }
 
     if(needsPositionAlignment_){
+        if(!gpsParametersVec_.back().gpsEnableLegacyPositionAlignment) {
+          LOG(INFO) << "[GPS] Skipping legacy dropout/re-init position-only alignment; "
+                    << "GPS velocity priors and normal GPS factors will keep constraining motion.";
+          needsPositionAlignment_ = false;
+          return false;
+        }
 
         gpsLossId = gpsDropoutId_;
 
@@ -961,9 +996,7 @@ bool ViGraph::needsPosGpsAlignment(StateId& gpsLossId, StateId& gpsAlignId, Eige
         return true;
 
       }
-    else{
-        return false;
-      }
+    return false;
 }
 
 bool ViGraph::needsInitialGpsAlignment(){
@@ -997,8 +1030,280 @@ void ViGraph::removeReInitGpsFactors(){
   LOG(INFO) << "[GPS] Removed re-init GPS factors from " << gpsReInitStates_.size() << " states.";
 }
 
+void ViGraph::deactivateReInitGpsFactors(){
+  size_t deactivated = 0;
+  for(const StateId sid : gpsReInitStates_){
+    if(!states_.count(sid)) continue;
+    State& state = states_.at(sid);
+    for(auto& factor : state.GpsFactors){
+      if(factor.residualBlockId) {
+        problem_->RemoveResidualBlock(factor.residualBlockId);
+        factor.residualBlockId = nullptr;
+        ++deactivated;
+      }
+    }
+  }
+  LOG(INFO) << "[GPS] Deactivated " << deactivated
+            << " rejected re-init GPS residuals while keeping measurements.";
+}
+
+void ViGraph::activateReInitGpsFactors(){
+  size_t activated = 0;
+  for(const StateId sid : gpsReInitStates_){
+    if(!states_.count(sid)) continue;
+    State& state = states_.at(sid);
+    for(auto& factor : state.GpsFactors){
+      if(!factor.errorTerm)
+        continue;
+      if(factor.residualBlockId) {
+        problem_->RemoveResidualBlock(factor.residualBlockId);
+        factor.residualBlockId = nullptr;
+      }
+      if(factor.weakReinitPositionFactor) {
+        const double weakScale = std::max(1.0e-6, factor.weakReinitPositionSigmaScale);
+        ceres::GpsErrorAsynchronous::covariance_t normalInformation =
+            factor.errorTerm->information() * weakScale * weakScale;
+        factor.errorTerm->setInformation(normalInformation);
+      }
+      factor.weakReinitPositionFactor = false;
+      factor.weakReinitPositionSigmaScale = 1.0;
+      factor.residualBlockId =
+          problem_->AddResidualBlock(factor.errorTerm.get(),
+                                     cauchyGpsLossFunctionPtr_.get(),
+                                     state.pose->parameters(),
+                                     state.speedAndBias->parameters(),
+                                     state.T_GW->parameters());
+      ++activated;
+    }
+  }
+  LOG(INFO) << "[GPS] Activated " << activated
+            << " re-init GPS residuals after passing T_GW quality gates.";
+}
+
 void ViGraph::resetPosGpsAlignment(){
     needsPositionAlignment_=false;
+}
+
+bool ViGraph::applyBoundedGpsWindowCorrection(const Eigen::Vector3d& correction_W,
+                                              size_t* shiftedStates,
+                                              size_t* shiftedLandmarks) {
+  if(shiftedStates)
+    *shiftedStates = 0;
+  if(shiftedLandmarks)
+    *shiftedLandmarks = 0;
+
+  if(!correction_W.allFinite() || correction_W.norm() < 1.0e-9)
+    return false;
+
+  size_t numShiftedStates = 0;
+  for(auto& stateEntry : states_) {
+    State& state = stateEntry.second;
+    if(!state.pose || state.pose->fixed())
+      continue;
+
+    const okvis::kinematics::Transformation T_WS = state.pose->estimate();
+    const okvis::kinematics::Transformation T_WS_shifted(T_WS.r() + correction_W,
+                                                         T_WS.q());
+    state.pose->setEstimate(T_WS_shifted);
+    ++numShiftedStates;
+  }
+
+  if(numShiftedStates == 0)
+    return false;
+
+  size_t numShiftedLandmarks = 0;
+  for(auto& landmarkEntry : landmarks_) {
+    Landmark& landmark = landmarkEntry.second;
+    if(!landmark.hPoint)
+      continue;
+
+    Eigen::Vector4d hPoint = landmark.hPoint->estimate();
+    if(!hPoint.allFinite())
+      continue;
+
+    hPoint.head<3>() += correction_W * hPoint(3);
+    landmark.hPoint->setEstimate(hPoint);
+    ++numShiftedLandmarks;
+  }
+
+  if(shiftedStates)
+    *shiftedStates = numShiftedStates;
+  if(shiftedLandmarks)
+    *shiftedLandmarks = numShiftedLandmarks;
+
+  return true;
+}
+
+bool ViGraph::maybeApplyBoundedGpsRecovery(StateId poseId,
+                                           const GpsMeasurement& gpsMeas,
+                                           ceres::GpsErrorAsynchronous& gpsError) {
+  const GpsParameters& gpsParameters = gpsParametersVec_.back();
+  if(!gpsParameters.gpsBoundedRecoveryEnabled ||
+     !gpsBoundedRecoveryPoseCorrectionEnabled_ ||
+     gpsParameters.gpsBoundedRecoveryMaxStep <= 0.0 ||
+     !gpsFixed_ ||
+     states_.count(poseId) == 0) {
+    return false;
+  }
+
+  const bool statusAllowed =
+      (gpsStatus_ == gpsStatus::Initialised &&
+       gpsParameters.gpsBoundedRecoveryApplyInInitialised) ||
+      (gpsStatus_ == gpsStatus::ReInitialising &&
+       gpsParameters.gpsBoundedRecoveryApplyInReInitialising);
+  if(!statusAllowed)
+    return false;
+
+  State& state = states_.at(poseId);
+  okvis::kinematics::Transformation T_WS_prop;
+  gpsError.applyPreInt(state.pose->estimate(), state.speedAndBias->estimate(), T_WS_prop);
+
+  const okvis::kinematics::Transformation T_GW_curr = T_GW();
+  const Eigen::Vector3d antenna_W = T_WS_prop.r() + T_WS_prop.C() * gpsParameters.r_SA;
+  const Eigen::Vector3d antenna_G = T_GW_curr.C() * antenna_W + T_GW_curr.r();
+  Eigen::Vector3d residual_G = gpsMeas.measurement.position - antenna_G;
+  if(!residual_G.allFinite())
+    return false;
+
+  const double horizontalResidual = residual_G.head<2>().norm();
+  const double exitThreshold = std::max(0.0, gpsParameters.gpsBoundedRecoveryExitThreshold);
+  const double startThreshold =
+      std::max(exitThreshold, gpsParameters.gpsBoundedRecoveryResidualThreshold);
+
+  if(horizontalResidual <= exitThreshold) {
+    if(gpsBoundedRecoveryConsecutiveLargeResiduals_ > 0 ||
+       gpsBoundedRecoveryAccumulatedDistance_ > 0.0) {
+      LOG(INFO) << "[GPS bounded recovery] Residual recovered at state "
+                << poseId.value() << ": horizontal=" << horizontalResidual
+                << " m <= exit=" << exitThreshold
+                << " m, reset accumulated correction="
+                << gpsBoundedRecoveryAccumulatedDistance_ << " m.";
+    }
+    gpsBoundedRecoveryConsecutiveLargeResiduals_ = 0;
+    gpsBoundedRecoveryAccumulatedDistance_ = 0.0;
+    return false;
+  }
+
+  if(horizontalResidual < startThreshold) {
+    gpsBoundedRecoveryConsecutiveLargeResiduals_ = 0;
+    return false;
+  }
+
+  const double stationarySpeedThreshold =
+      gpsParameters.gpsBoundedRecoveryStationarySpeedThreshold;
+  if(stationarySpeedThreshold > 0.0 && gpsVelocityReferenceValid_) {
+    const double dt = (gpsMeas.timeStamp - gpsVelocityReferenceTime_).toSec();
+    const double minDt = std::max(0.0, gpsParameters.gpsVelocityMinDt);
+    const double maxDt = gpsParameters.gpsVelocityMaxDt > 0.0
+                             ? gpsParameters.gpsVelocityMaxDt
+                             : std::numeric_limits<double>::infinity();
+    if(dt >= minDt && dt <= maxDt) {
+      const Eigen::Vector3d vGps_G =
+          (gpsMeas.measurement.position - gpsVelocityReferencePosition_G_) / dt;
+      const double gpsSpeed = vGps_G.head<2>().norm();
+      if(gpsSpeed <= stationarySpeedThreshold) {
+        ++gpsBoundedRecoveryLogCounter_;
+        if(gpsBoundedRecoveryLogCounter_ <= 10 ||
+           gpsBoundedRecoveryLogCounter_ % 25 == 0 ||
+           gpsBoundedRecoveryConsecutiveLargeResiduals_ > 0) {
+          LOG(INFO) << "[GPS bounded recovery] Skipping correction at state "
+                    << poseId.value()
+                    << ": GPS speed=" << gpsSpeed
+                    << " m/s <= stationary threshold="
+                    << stationarySpeedThreshold
+                    << " m/s, horizontal_residual="
+                    << horizontalResidual
+                    << " m. Keeping GPS factors/velocity priors active.";
+        }
+        gpsBoundedRecoveryConsecutiveLargeResiduals_ = 0;
+        gpsBoundedRecoveryAccumulatedDistance_ = 0.0;
+        return false;
+      }
+    }
+  }
+
+  ++gpsBoundedRecoveryConsecutiveLargeResiduals_;
+  const int requiredConsecutive =
+      std::max(1, gpsParameters.gpsBoundedRecoveryConsecutive);
+  if(gpsBoundedRecoveryConsecutiveLargeResiduals_ < requiredConsecutive) {
+    ++gpsBoundedRecoveryLogCounter_;
+    if(gpsBoundedRecoveryLogCounter_ <= 10 ||
+       gpsBoundedRecoveryLogCounter_ % 25 == 0 ||
+       gpsStatus_ == gpsStatus::ReInitialising) {
+      LOG(INFO) << "[GPS bounded recovery] Large GPS/VIO residual at state "
+                << poseId.value() << ": horizontal=" << horizontalResidual
+                << " m, consecutive="
+                << gpsBoundedRecoveryConsecutiveLargeResiduals_ << "/"
+                << requiredConsecutive << ".";
+    }
+    return false;
+  }
+
+  Eigen::Vector3d correction_G = residual_G;
+  if(gpsParameters.gpsBoundedRecoveryHorizontalOnly)
+    correction_G.z() = 0.0;
+
+  double correctionNorm = correction_G.norm();
+  if(correctionNorm < 1.0e-9)
+    return false;
+
+  const double maxStep = gpsParameters.gpsBoundedRecoveryMaxStep;
+  if(correctionNorm > maxStep) {
+    correction_G *= maxStep / correctionNorm;
+    correctionNorm = maxStep;
+  }
+
+  Eigen::Vector3d correction_W = T_GW_curr.C().transpose() * correction_G;
+  double stepNorm = correction_W.norm();
+  const double maxTotal = gpsParameters.gpsBoundedRecoveryMaxTotal;
+  if(maxTotal > 0.0) {
+    const double remaining = maxTotal - gpsBoundedRecoveryAccumulatedDistance_;
+    if(remaining <= 0.0) {
+      ++gpsBoundedRecoveryLogCounter_;
+      if(gpsBoundedRecoveryLogCounter_ <= 10 ||
+         gpsBoundedRecoveryLogCounter_ % 25 == 0 ||
+         gpsStatus_ == gpsStatus::ReInitialising) {
+        LOG(WARNING) << "[GPS bounded recovery] Skipping correction at state "
+                     << poseId.value() << ": accumulated correction "
+                     << gpsBoundedRecoveryAccumulatedDistance_
+                     << " m reached max_total=" << maxTotal << " m.";
+      }
+      return false;
+    }
+    if(stepNorm > remaining) {
+      correction_W *= remaining / stepNorm;
+      stepNorm = remaining;
+    }
+  }
+
+  size_t shiftedStates = 0;
+  size_t shiftedLandmarks = 0;
+  if(!applyBoundedGpsWindowCorrection(correction_W, &shiftedStates, &shiftedLandmarks)) {
+    ++gpsBoundedRecoveryLogCounter_;
+    if(gpsBoundedRecoveryLogCounter_ <= 10 ||
+       gpsBoundedRecoveryLogCounter_ % 25 == 0 ||
+       gpsStatus_ == gpsStatus::ReInitialising) {
+      LOG(INFO) << "[GPS bounded recovery] Wanted correction at state "
+                << poseId.value() << " but no variable local states were available.";
+    }
+    return false;
+  }
+
+  gpsBoundedRecoveryAccumulatedDistance_ += stepNorm;
+  ++gpsBoundedRecoveryLogCounter_;
+  LOG(WARNING) << "[GPS bounded recovery] Applied local window correction at state "
+               << poseId.value()
+               << ", status=" << int(gpsStatus_)
+               << ", horizontal_residual=" << horizontalResidual
+               << " m, correction_W=" << correction_W.transpose()
+               << " m, step=" << stepNorm
+               << " m, accumulated=" << gpsBoundedRecoveryAccumulatedDistance_
+               << " m, shifted_states=" << shiftedStates
+               << ", shifted_landmarks=" << shiftedLandmarks
+               << ", consecutive="
+               << gpsBoundedRecoveryConsecutiveLargeResiduals_;
+
+  return true;
 }
 
 bool ViGraph::addGpsMeasurement(StateId poseId, GpsMeasurement &gpsMeas, const ImuMeasurementDeque &imuMeasurements){
@@ -1028,17 +1333,159 @@ bool ViGraph::addGpsMeasurement(StateId poseId, GpsMeasurement &gpsMeas, const I
     // (e.g. RTK-fixed solutions reporting hAcc=0 / vAcc=0) which would produce a singular
     // covariance matrix → NaN information matrix → NaN residuals → Ceres optimizer termination.
     static constexpr double kMinGpsSigma = 0.01; // 1 cm minimum sigma
-    const double sigmaScale = gpsParametersVec_.back().gpsSigmaScale;
+    const GpsParameters& gpsParameters = gpsParametersVec_.back();
+    const double sigmaScale = gpsParameters.gpsSigmaScale;
     Eigen::Matrix3d safeCovariance = gpsMeas.measurement.covariances * (sigmaScale * sigmaScale);
     for(int i = 0; i < 3; ++i)
       safeCovariance(i,i) = std::max(safeCovariance(i,i), kMinGpsSigma * kMinGpsSigma);
-    newGpsFactor.errorTerm.reset(new ceres::GpsErrorAsynchronous(gpsMeas.measurement.position, safeCovariance.inverse(),
-                                     imuMeasurements, imuParametersVec_.back(),state.timestamp, gpsMeas.timeStamp, gpsParametersVec_.back()));
-    if(gpsStatus_ == gpsStatus::Initialising || gpsStatus_ == gpsStatus::Initialised || gpsStatus_ == gpsStatus::ReInitialising) {
+    Eigen::Matrix3d factorCovariance = safeCovariance;
+    const bool useWeakReinitPositionFactor =
+        gpsStatus_ == gpsStatus::ReInitialising &&
+        gpsParameters.gpsReinitPositionSigmaScale > 0.0;
+    if(useWeakReinitPositionFactor) {
+      const double reinitPositionScale = gpsParameters.gpsReinitPositionSigmaScale;
+      factorCovariance *= reinitPositionScale * reinitPositionScale;
+    }
+    newGpsFactor.weakReinitPositionFactor = useWeakReinitPositionFactor;
+    newGpsFactor.weakReinitPositionSigmaScale =
+        useWeakReinitPositionFactor ? gpsParameters.gpsReinitPositionSigmaScale : 1.0;
+    newGpsFactor.errorTerm.reset(new ceres::GpsErrorAsynchronous(gpsMeas.measurement.position, factorCovariance.inverse(),
+                                     imuMeasurements, imuParametersVec_.back(),state.timestamp, gpsMeas.timeStamp, gpsParameters));
+    maybeApplyBoundedGpsRecovery(poseId, gpsMeas, *newGpsFactor.errorTerm);
+    // During ReInitialising, keep a configurable weak GPS position residual active so the
+    // realtime window does not degrade into pure VIO, while avoiding the old hard position pull.
+    if(gpsStatus_ == gpsStatus::Initialising || gpsStatus_ == gpsStatus::Initialised) {
       newGpsFactor.residualBlockId = problem_->AddResidualBlock(newGpsFactor.errorTerm.get(), cauchyGpsLossFunctionPtr_.get(),
                                                                    state.pose->parameters(),state.speedAndBias->parameters(), state.T_GW->parameters());
+    } else if(useWeakReinitPositionFactor) {
+      newGpsFactor.residualBlockId =
+          problem_->AddResidualBlock(newGpsFactor.errorTerm.get(),
+                                     cauchyReinitGpsLossFunctionPtr_.get(),
+                                     state.pose->parameters(),
+                                     state.speedAndBias->parameters(),
+                                     state.T_GW->parameters());
     }
     state.GpsFactors.push_back(newGpsFactor);
+    ++gpsMeasurementLogCounter_;
+    const bool gpsPositionResidualActive = newGpsFactor.residualBlockId != nullptr;
+    const bool gpsStateFixed = state.pose->fixed() || state.speedAndBias->fixed();
+    if(gpsMeasurementLogCounter_ <= 10 || gpsMeasurementLogCounter_ % 25 == 0 ||
+       gpsStatus_ == gpsStatus::ReInitialising || gpsStateFixed) {
+      LOG(INFO) << "[GPS add] state=" << poseId.value()
+                << " status=" << int(gpsStatus_)
+                << " residual_active=" << gpsPositionResidualActive
+                << " reinit_position_factor=" << useWeakReinitPositionFactor
+                << " reinit_sigma_scale=" << gpsParameters.gpsReinitPositionSigmaScale
+                << " state_fixed=" << gpsStateFixed
+                << " gps_time=" << gpsMeas.timeStamp
+                << " state_time=" << state.timestamp
+                << " total=" << gpsMeasurementLogCounter_;
+    }
+
+    if(gpsFixed_ && gpsParameters.gpsVelocitySigma > 0.0 &&
+       (gpsStatus_ == gpsStatus::Initialised || gpsStatus_ == gpsStatus::ReInitialising)) {
+      if(gpsVelocityReferenceValid_) {
+        const double dt = (gpsMeas.timeStamp - gpsVelocityReferenceTime_).toSec();
+        const double minDt = std::max(0.0, gpsParameters.gpsVelocityMinDt);
+        const double maxDt = gpsParameters.gpsVelocityMaxDt > 0.0
+                                 ? gpsParameters.gpsVelocityMaxDt
+                                 : std::numeric_limits<double>::infinity();
+        if(dt >= minDt && dt <= maxDt) {
+          const Eigen::Vector3d vGps_G =
+              (gpsMeas.measurement.position - gpsVelocityReferencePosition_G_) / dt;
+          const double gpsSpeed = vGps_G.head<2>().norm();
+          if(gpsParameters.gpsMaxSpeed <= 0.0 || gpsSpeed <= gpsParameters.gpsMaxSpeed) {
+            StateId velocityPriorStateId = poseId;
+            State* velocityPriorState = &state;
+            bool remappedVelocityPrior = false;
+            double gpsAgeAtVelocityState = 0.0;
+            if(state.speedAndBias->fixed()) {
+              velocityPriorState = nullptr;
+              for(auto stateIter = states_.rbegin(); stateIter != states_.rend(); ++stateIter) {
+                State& candidateState = stateIter->second;
+                if(candidateState.speedAndBias->fixed())
+                  continue;
+                const double age = (candidateState.timestamp - gpsMeas.timeStamp).toSec();
+                if(age >= 0.0 && age <= maxDt) {
+                  velocityPriorStateId = stateIter->first;
+                  velocityPriorState = &candidateState;
+                  remappedVelocityPrior = true;
+                  gpsAgeAtVelocityState = age;
+                }
+                break;
+              }
+            }
+
+            if(!velocityPriorState) {
+              ++gpsVelocityPriorSkipLogCounter_;
+              if(gpsVelocityPriorSkipLogCounter_ <= 10 ||
+                 gpsVelocityPriorSkipLogCounter_ % 25 == 0) {
+                LOG(INFO) << "[GPS velocity] Skipping prior at GPS state "
+                          << poseId.value()
+                          << ": matched state is fixed and no recent unfixed state is available.";
+              }
+            } else {
+              okvis::SpeedAndBias speedAndBiasMeasurement =
+                  velocityPriorState->speedAndBias->estimate();
+              const Eigen::Vector3d vGps_W = T_GW().inverse().C() * vGps_G;
+              speedAndBiasMeasurement.head<2>() = vGps_W.head<2>();
+
+              okvis::ceres::SpeedAndBiasError::information_t information;
+              information.setZero();
+              const double velocityVariance =
+                  gpsParameters.gpsVelocitySigma * gpsParameters.gpsVelocitySigma;
+              information(0,0) = 1.0 / velocityVariance;
+              information(1,1) = 1.0 / velocityVariance;
+              static constexpr double kWeakInformation = 1.0e-12;
+              for(int i = 2; i < 9; ++i)
+                information(i,i) = kWeakInformation;
+
+              if(velocityPriorState->gpsVelocityPrior.residualBlockId) {
+                problem_->RemoveResidualBlock(velocityPriorState->gpsVelocityPrior.residualBlockId);
+                velocityPriorState->gpsVelocityPrior.residualBlockId = nullptr;
+              }
+              velocityPriorState->gpsVelocityPrior.errorTerm.reset(
+                  new ceres::SpeedAndBiasError(speedAndBiasMeasurement, information));
+              velocityPriorState->gpsVelocityPrior.residualBlockId =
+                  problem_->AddResidualBlock(velocityPriorState->gpsVelocityPrior.errorTerm.get(),
+                                             nullptr,
+                                             velocityPriorState->speedAndBias->parameters());
+              ++gpsVelocityPriorLogCounter_;
+              if(gpsVelocityPriorLogCounter_ <= 10 ||
+                 gpsVelocityPriorLogCounter_ % 25 == 0 ||
+                 remappedVelocityPrior ||
+                 gpsStatus_ == gpsStatus::ReInitialising) {
+                LOG(INFO) << "[GPS velocity] Added horizontal velocity prior at state "
+                          << velocityPriorStateId.value()
+                          << " from GPS state " << poseId.value()
+                          << ": v_gps_W=" << vGps_W.head<2>().transpose()
+                          << " m/s, dt=" << dt
+                          << " s, sigma=" << gpsParameters.gpsVelocitySigma
+                          << " m/s, remapped_from_fixed_state="
+                          << remappedVelocityPrior
+                          << ", gps_age_at_velocity_state="
+                          << gpsAgeAtVelocityState << " s";
+              }
+            }
+          } else {
+            LOG(WARNING) << "[GPS velocity] Skipping velocity prior: speed="
+                         << gpsSpeed << " m/s exceeds max="
+                         << gpsParameters.gpsMaxSpeed << " m/s";
+          }
+        } else {
+          ++gpsVelocityPriorSkipLogCounter_;
+          if(gpsVelocityPriorSkipLogCounter_ <= 10 ||
+             gpsVelocityPriorSkipLogCounter_ % 25 == 0) {
+            LOG(INFO) << "[GPS velocity] Skipping prior at state "
+                      << poseId.value() << ": dt=" << dt
+                      << " s outside [" << minDt << ", " << maxDt << "] s";
+          }
+        }
+      }
+      gpsVelocityReferenceValid_ = true;
+      gpsVelocityReferenceTime_ = gpsMeas.timeStamp;
+      gpsVelocityReferencePosition_G_ = gpsMeas.measurement.position;
+    }
 
     // Populate persistent init buffer for RANSAC-based initialization.
     // gpsStates_ entries are erased on state marginalization, so RANSAC (which needs ~40 points)
@@ -1175,10 +1622,7 @@ bool ViGraph::checkForGpsInit(okvis::kinematics::Transformation& T_GW, std::set<
     // marginalization), which is not enough for any alignment. gpsInitPointBuffer_ accumulates
     // across time without being erased. For initial init the buffer is cleared on Initialised;
     // for ReInit the buffer is cleared by reInitGpsExtrinsics() and re-accumulated fresh.
-    size_t startIdx = 0;
-    if(gpsInitPointBuffer_.size() > 100)
-      startIdx = gpsInitPointBuffer_.size() - 100;
-    for(size_t i = startIdx; i < gpsInitPointBuffer_.size(); ++i){
+    for(size_t i = 0; i < gpsInitPointBuffer_.size(); ++i){
       gpsPoints.push_back(gpsInitPointBuffer_[i].gpsPos);
       worldPoints.push_back(gpsInitPointBuffer_[i].worldPos);
       covariances.push_back(gpsInitPointBuffer_[i].cov);
@@ -1335,7 +1779,8 @@ int ViGraph::checkValidGpsMeasurements(GpsMeasurementDeque& inputGpsMeasurementD
   StateId lastGpsStateId;
   if(gpsStatus_ == gpsStatus::Initialised){
     lastGpsStateId = *(gpsStates_.rbegin());
-    needsReInit = states_.at(lastGpsStateId).pose->fixed();
+    needsReInit = gpsParametersVec_.back().gpsEnableReInit &&
+                  states_.at(lastGpsStateId).pose->fixed();
   }
   else if (gpsStatus_ == gpsStatus::ReInitialising){
     lastGpsStateId = gpsDropoutId_;
@@ -1399,10 +1844,36 @@ int ViGraph::checkValidGpsMeasurements(GpsMeasurementDeque& inputGpsMeasurementD
         double sigma_y = outlierScale * std::sqrt(rIterMeas->measurement.covariances(1,1));
         double sigma_z = outlierScale * std::sqrt(rIterMeas->measurement.covariances(2,2));
 
-        if(fabs(error.x()) > 3.0*sigma_x || fabs(error.y()) > 3.0*sigma_y || fabs(error.z()) > 3.0*sigma_z){
+        const bool violatesThreeSigma =
+            fabs(error.x()) > 3.0*sigma_x ||
+            fabs(error.y()) > 3.0*sigma_y ||
+            fabs(error.z()) > 3.0*sigma_z;
+        const double horizontalResidual = error.head<2>().norm();
+        const GpsParameters& gpsParameters = gpsParametersVec_.back();
+        const bool allowForBoundedRecovery =
+            violatesThreeSigma &&
+            gpsParameters.gpsBoundedRecoveryEnabled &&
+            gpsParameters.gpsBoundedRecoveryApplyInInitialised &&
+            gpsParameters.gpsBoundedRecoveryMaxStep > 0.0 &&
+            horizontalResidual >= gpsParameters.gpsBoundedRecoveryResidualThreshold;
+        if(violatesThreeSigma && !allowForBoundedRecovery){
           continue;
         }
         else{
+          if(allowForBoundedRecovery) {
+            ++gpsBoundedRecoveryFilterBypassLogCounter_;
+            if(gpsBoundedRecoveryFilterBypassLogCounter_ <= 10 ||
+               gpsBoundedRecoveryFilterBypassLogCounter_ % 25 == 0) {
+              LOG(INFO) << "[GPS bounded recovery] Allowing large-residual GPS through "
+                        << "Initialised filter at state " << sid.value()
+                        << ": horizontal=" << horizontalResidual
+                        << " m, sigma=(" << sigma_x << ", "
+                        << sigma_y << ", " << sigma_z
+                        << "), threshold="
+                        << gpsParameters.gpsBoundedRecoveryResidualThreshold
+                        << " m.";
+            }
+          }
           countValidMeasurements++;
           gpsMeasurementDeque.push_back(*rIterMeas);
         }

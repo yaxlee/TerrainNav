@@ -114,6 +114,16 @@ void okvis::TrajectoryOutput::drawTopView(cv::Mat& outImg) {
     _path.push_back(cv::Point2d(r[0], r[1]));
     _heights.push_back(r[2]);
 
+    // Get GPS Measurements
+    const AlignedMap<StateId, State> updated_states =  *std::get<2>(*graphStates);
+    for(auto updated_state : updated_states){
+      kinematics::Transformation T_WG = updated_state.second.T_GW.inverse();
+      for(auto& measurement : updated_state.second.gpsPoints){
+        Eigen::Vector3d point_in_W = (T_WG.T() * measurement.homogeneous()).head<3>();
+        _gps.push_back(cv::Point2d(point_in_W.x(), point_in_W.y()));
+      }
+    }
+
     // maintain scaling
     if (r[0] - _frameScale < _min_x)
       _min_x = r[0] - _frameScale;
@@ -127,6 +137,16 @@ void okvis::TrajectoryOutput::drawTopView(cv::Mat& outImg) {
       _max_y = r[1] + _frameScale;
     if (r[2] > _max_z)
       _max_z = r[2];
+    for(const auto& gps : _gps) {
+      if (gps.x - _frameScale < _min_x)
+        _min_x = gps.x - _frameScale;
+      if (gps.y - _frameScale < _min_y)
+        _min_y = gps.y - _frameScale;
+      if (gps.x + _frameScale > _max_x)
+        _max_x = gps.x + _frameScale;
+      if (gps.y + _frameScale > _max_y)
+        _max_y = gps.y + _frameScale;
+    }
     _scale = std::min(_imageSize / (_max_x - _min_x), _imageSize / (_max_y - _min_y));
 
     // reset image
@@ -142,16 +162,6 @@ void okvis::TrajectoryOutput::drawTopView(cv::Mat& outImg) {
       if (pt.x<0 || pt.y<0 || pt.x > _imageSize-1 || pt.y > _imageSize-1) continue;
       const double colourScale = std::min(1.0,lm.quality/0.1);
       cv::circle(_image, pt, 1.0, colourScale*cv::Scalar(0,255,0), cv::FILLED, cv::LINE_AA);
-    }
-
-    // Get GPS Measurements
-    const AlignedMap<StateId, State> updated_states =  *std::get<2>(*graphStates);
-    for(auto updated_state : updated_states){
-      kinematics::Transformation T_WG = updated_state.second.T_GW.inverse();
-      for(auto& measurement : updated_state.second.gpsPoints){
-        Eigen::Vector3d point_in_W = (T_WG.T() * measurement.homogeneous()).head<3>();
-        _gps.push_back(cv::Point2d(point_in_W.x(), point_in_W.y()));
-      }
     }
 
     // draw the path

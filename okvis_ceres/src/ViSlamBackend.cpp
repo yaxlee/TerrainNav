@@ -21,6 +21,7 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
+#include <cmath>
 
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/imgcodecs/imgcodecs.hpp>
@@ -88,6 +89,18 @@ bool ViSlamBackend::addStationaryConstraint(StateId id, StateId referenceId,
   success &= realtimeGraph_.addStationaryPosePrior(
       id, T_WS_stationary, sigmaPosition, sigmaOrientation);
   return success;
+}
+
+void ViSlamBackend::setGpsBoundedRecoveryPausedByStationary(bool paused)
+{
+  if(gpsBoundedRecoveryPausedByStationary_ == paused)
+    return;
+
+  gpsBoundedRecoveryPausedByStationary_ = paused;
+  realtimeGraph_.setGpsBoundedRecoveryPoseCorrectionEnabled(!paused);
+  LOG(INFO) << "[GPS bounded recovery] "
+            << (paused ? "Paused" : "Resumed")
+            << " by visual stationary state.";
 }
 
 bool ViSlamBackend::addGpsMeasurementsOnAllGraphs(GpsMeasurementDeque& inputgpsMeasurementDeque, ImuMeasurementDeque& imuMeasurementDeque){
@@ -230,31 +243,36 @@ bool ViSlamBackend::tryGpsAlignment(){
         fullGraph_.resetFullGpsAlignment();
         return false;
       }
-      const double maxCorrection = realtimeGraph_.gpsParametersVec_.back().gpsMaxCorrection;
-      if(translationCorrection > maxCorrection) {
+
+      const okvis::GpsParameters& gpsParameters =
+          realtimeGraph_.gpsParametersVec_.back();
+      const double maxCorrection = gpsParameters.gpsMaxCorrection;
+      if(maxCorrection > 0.0 && translationCorrection > maxCorrection) {
         LOG(WARNING) << "[GPS] Rejecting full GPS LC: correction too large ("
                      << translationCorrection << " m > " << maxCorrection
                      << " m), likely bad re-init estimate";
-        realtimeGraph_.removeReInitGpsFactors();
-        fullGraph_.removeReInitGpsFactors();
+        realtimeGraph_.deactivateReInitGpsFactors();
+        fullGraph_.deactivateReInitGpsFactors();
         realtimeGraph_.resetFullGpsAlignment();
         fullGraph_.resetFullGpsAlignment();
         return false;
       }
-      const double maxYawCorrection = realtimeGraph_.gpsParametersVec_.back().gpsMaxYawCorrection;
-      if(maxYawCorrection > 0.0 && rotationCorrection > maxYawCorrection * M_PI / 180.0) {
+      const double maxYawCorrection = gpsParameters.gpsMaxYawCorrection;
+      if(maxYawCorrection > 0.0 &&
+         rotationCorrection > maxYawCorrection * M_PI / 180.0) {
         LOG(WARNING) << "[GPS] Rejecting full GPS LC: yaw correction too large ("
                      << rotationCorrection * 180.0 / M_PI
                      << " deg > " << maxYawCorrection
                      << " deg), likely bad re-init estimate";
-        realtimeGraph_.removeReInitGpsFactors();
-        fullGraph_.removeReInitGpsFactors();
+        realtimeGraph_.deactivateReInitGpsFactors();
+        fullGraph_.deactivateReInitGpsFactors();
         realtimeGraph_.resetFullGpsAlignment();
         fullGraph_.resetFullGpsAlignment();
         return false;
       }
     }
 
+    fullGraph_.activateReInitGpsFactors();
     attemptFullGpsAlignment(gpsDropId,alignId, T_GW_new);
 
     // Clear stale DEM factors before GPS loop-closure optimization.
@@ -284,7 +302,7 @@ bool ViSlamBackend::tryGpsAlignment(){
     // check for position alignments
     bool needPosAlign = realtimeGraph_.needsPosGpsAlignment(gpsDropId, alignId, posAlignVec);
     if(needPosAlign){
-      attemptPosGpsAlignment(gpsDropId,alignId, posAlignVec);
+      attemptPosGpsAlignment(gpsDropId, alignId, posAlignVec);
       addGpsAlignmentFrame(gpsDropId);
       realtimeGraph_.resetPosGpsAlignment();
       fullGraph_.resetPosGpsAlignment();
@@ -1910,20 +1928,29 @@ bool ViSlamBackend::synchroniseRealtimeAndFullGraph(std::vector<StateId> &update
   addSubmapAlignmentBacklog_.clear();
   // ----- Submap Alignment End -----
 
-  // copy the result over now
-  for(auto riter = fullGraph_.states_.crbegin(); riter != fullGraph_.states_.crend(); ++riter) {
-    if(riter->second.pose->fixed() && riter->second.speedAndBias->fixed()
-         && realtimeGraph_.states_.at(riter->first).pose->fixed()
-         && realtimeGraph_.states_.at(riter->first).speedAndBias->fixed()) {
-      /// \todo remove these for safety
-      OKVIS_ASSERT_TRUE(Exception, riter->second.pose->estimate().T()
-                        ==realtimeGraph_.pose(riter->first).T(), "O-O")
-      OKVIS_ASSERT_TRUE(Exception, riter->second.speedAndBias->estimate()
-                        ==realtimeGraph_.speedAndBias(riter->first), "O-O")
-      break;
-    } else {
-      updatedStates.push_back(riter->first);
-    }
+	  // copy the result over now
+	  for(auto riter = fullGraph_.states_.crbegin(); riter != fullGraph_.states_.crend(); ++riter) {
+	    if(riter->second.pose->fixed() && riter->second.speedAndBias->fixed()
+	         && realtimeGraph_.states_.at(riter->first).pose->fixed()
+	         && realtimeGraph_.states_.at(riter->first).speedAndBias->fixed()) {
+	      const bool poseMatches =
+	          riter->second.pose->estimate().T() == realtimeGraph_.pose(riter->first).T();
+	      const bool speedAndBiasMatches =
+	          riter->second.speedAndBias->estimate() == realtimeGraph_.speedAndBias(riter->first);
+	      if(!poseMatches || !speedAndBiasMatches) {
+	        LOG(WARNING) << "[Graph sync] Fixed boundary state " << riter->first.value()
+	                     << " differs between full and realtime graph "
+	                     << "(pose_match=" << poseMatches
+	                     << ", speed_bias_match=" << speedAndBiasMatches
+	                     << "); copying full graph estimate into realtime graph.";
+	        realtimeGraph_.setPose(riter->first, riter->second.pose->estimate());
+	        realtimeGraph_.setSpeedAndBias(riter->first, riter->second.speedAndBias->estimate());
+	        updatedStates.push_back(riter->first);
+	      }
+	      break;
+	    } else {
+	      updatedStates.push_back(riter->first);
+	    }
     if(realtimeGraph_.states_.count(riter->first) == 0) {
       OKVIS_THROW(Exception, "impossible: state not present")
       // new state not yet added
@@ -2827,7 +2854,8 @@ bool ViSlamBackend::attemptFullGpsAlignment(StateId pose_i , StateId pose_j, con
   return true;
 }
 
-bool ViSlamBackend::attemptPosGpsAlignment(StateId pose_i , StateId pose_j, const Eigen::Vector3d& posAlignVec){
+bool ViSlamBackend::attemptPosGpsAlignment(StateId pose_i , StateId pose_j,
+                                           const Eigen::Vector3d& posAlignVec){
 
     OKVIS_ASSERT_TRUE(Exception, !isLoopClosing_, "Loop closure still running")
     OKVIS_ASSERT_TRUE(Exception, !isLoopClosureAvailable_, "loop closure not finished, cannot merge landmarks")
@@ -2877,6 +2905,7 @@ bool ViSlamBackend::attemptPosGpsAlignment(StateId pose_i , StateId pose_j, cons
       lastId = id;
       fullDistanceTravelled += ds;
     }
+    const bool distributeByDistance = fullDistanceTravelled > 1.0e-6;
 
     // Now apply position adjustments based on distance travelled
     size_t counter = 0; // counter to iterate distances vector
@@ -2891,10 +2920,13 @@ bool ViSlamBackend::attemptPosGpsAlignment(StateId pose_i , StateId pose_j, cons
       //std::cout << "Adjusting state " << id.value() << std::endl;
       if(id.value() <= pose_j.value()){
 
-          distanceTravelled += distances.at(counter);
+          if(distributeByDistance)
+            distanceTravelled += distances.at(counter);
 
           // position adjustment
-          Eigen::Vector3d dr = distanceTravelled/fullDistanceTravelled * r_Wold_Wnew;
+          Eigen::Vector3d dr = distributeByDistance
+              ? distanceTravelled/fullDistanceTravelled * r_Wold_Wnew
+              : r_Wold_Wnew;
           // now apply position adjustment
           T_WS = realtimeGraph_.pose(id);
           okvis::kinematics::Transformation T_WS_set(T_WS.r()+dr,T_WS.q());

@@ -482,6 +482,15 @@ class ViGraph
   /// \brief Set the current GPS Status of the Graph
   void setGpsStatus(gpsStatus status){gpsStatus_ = status;};
 
+  /// \brief Enable/disable direct pose-window shifts from bounded GPS recovery on this graph.
+  void setGpsBoundedRecoveryPoseCorrectionEnabled(bool enabled) {
+    if(gpsBoundedRecoveryPoseCorrectionEnabled_ == enabled)
+      return;
+    gpsBoundedRecoveryPoseCorrectionEnabled_ = enabled;
+    gpsBoundedRecoveryConsecutiveLargeResiduals_ = 0;
+    gpsBoundedRecoveryAccumulatedDistance_ = 0.0;
+  }
+
   /// \brief Check if stateID exists in graph
   /// \return True if state with id exists. False otherwise
   bool findStateId(StateId sid){ return states_.count(sid);}
@@ -544,6 +553,10 @@ class ViGraph
   /// Call this when rejecting a bad GPS loop closure to prevent stale high-residual
   /// factors from polluting subsequent optimisation.
   void removeReInitGpsFactors();
+  /// \brief Deactivate rejected re-initialisation GPS factors while keeping measurements for display/bookkeeping.
+  void deactivateReInitGpsFactors();
+  /// \brief Activate stored re-initialisation GPS measurements as optimisation residuals.
+  void activateReInitGpsFactors();
   /// \brief reset after position alignment
   void resetPosGpsAlignment();
   /// \brief reset after initial alignment
@@ -618,6 +631,16 @@ class ViGraph
   /// \param[out] yaw_error: optionally return the estimated yaw error
 
   bool checkForGpsInit(okvis::kinematics::Transformation& T_GW, std::set<StateId> consideredStates, double* yaw_error = nullptr);
+
+  /// \brief Apply a small bounded GPS/VIO residual correction to the active local window.
+  bool maybeApplyBoundedGpsRecovery(StateId poseId,
+                                    const GpsMeasurement& gpsMeas,
+                                    ceres::GpsErrorAsynchronous& gpsError);
+
+  /// \brief Translate all currently variable poses and local landmarks by a small amount.
+  bool applyBoundedGpsWindowCorrection(const Eigen::Vector3d& correction_W,
+                                       size_t* shiftedStates,
+                                       size_t* shiftedLandmarks);
 
   /// \brief             Add Alignment constraints from submapping interface
   /// @param frame_A_id  ID of frame {A}
@@ -818,7 +841,10 @@ protected:
   using RelativePoseLink = TwoStateGraphEdge<ceres::RelativePoseError>;
 
   /// \brief GPS factor pose graph edge.
-  using GpsFactor = GraphEdge<ceres::GpsErrorAsynchronous>;
+  struct GpsFactor : public GraphEdge<ceres::GpsErrorAsynchronous> {
+    bool weakReinitPositionFactor = false;
+    double weakReinitPositionSigmaScale = 1.0;
+  };
 
   /// \brief DEM height factor (1-DOF height constraint).
   using DemFactor = GraphEdge<ceres::DemHeightError>;
@@ -845,6 +871,7 @@ protected:
     PosePrior posePrior; ///< Pose prior.
     SpeedAndBiasPrior speedAndBiasPrior; ///< Speed/bias prior.
     SpeedAndBiasPrior stationaryVelocityPrior; ///< Stationary zero-velocity prior.
+    SpeedAndBiasPrior gpsVelocityPrior; ///< GPS-derived horizontal velocity prior.
     PosePrior stationaryPosePrior; ///< Stationary no-motion pose prior.
     std::vector<ExtrinsicsPrior> extrinsicsPriors; ///< Extrinsics prior.
     std::map<StateId, TwoPoseLink> twoPoseLinks; ///< All pose graph edges.
@@ -912,6 +939,17 @@ protected:
 
   StateId gpsDropoutId_; /// < Id of state with last gps measurement before break
   StateId positionAlignedId_; /// < ID of state which was only position aligned
+  bool gpsVelocityReferenceValid_ = false; ///< True once a GPS point is available for finite-difference velocity.
+  okvis::Time gpsVelocityReferenceTime_; ///< Previous GPS measurement time for velocity prior.
+  Eigen::Vector3d gpsVelocityReferencePosition_G_ = Eigen::Vector3d::Zero(); ///< Previous GPS position in global frame.
+  size_t gpsMeasurementLogCounter_ = 0; ///< Throttles GPS measurement diagnostics.
+  size_t gpsVelocityPriorLogCounter_ = 0; ///< Throttles GPS velocity prior diagnostics.
+  size_t gpsVelocityPriorSkipLogCounter_ = 0; ///< Throttles GPS velocity prior skip diagnostics.
+  bool gpsBoundedRecoveryPoseCorrectionEnabled_ = true; ///< Direct pose shifts are intended for the realtime graph only.
+  int gpsBoundedRecoveryConsecutiveLargeResiduals_ = 0; ///< Consecutive large residual counter for bounded recovery.
+  double gpsBoundedRecoveryAccumulatedDistance_ = 0.0; ///< Accumulated local-window correction distance since last recovery reset.
+  size_t gpsBoundedRecoveryLogCounter_ = 0; ///< Throttles bounded GPS recovery diagnostics.
+  size_t gpsBoundedRecoveryFilterBypassLogCounter_ = 0; ///< Throttles GPS filter bypass diagnostics.
 
   std::set<StateId> gpsReInitStates_; /// < Set containing States with gps measurements during re-initialization
   bool gpsReInitialised_ = false; /// < Flag if Re-Initialisation is successful and GPS LC can be triggered
@@ -938,6 +976,7 @@ protected:
   // loss function for reprojection errors
   std::shared_ptr< ::ceres::LossFunction> cauchyLossFunctionPtr_; ///< Cauchy loss.
   std::shared_ptr< ::ceres::LossFunction> cauchyGpsLossFunctionPtr_; ///< Cauchy loss for GPS.
+  std::shared_ptr< ::ceres::LossFunction> cauchyReinitGpsLossFunctionPtr_; ///< Cauchy loss for weak GPS during re-init.
   std::shared_ptr< ::ceres::LossFunction> huberLossFunctionPtr_; ///< Huber loss.
   std::shared_ptr< ::ceres::LossFunction> tukeyDepthLossFunctionPtr_; ///< Tukey loss for Depth.
   std::shared_ptr< ::ceres::LossFunction> tukeyLidarLossFunctionPtr_; ///< Tukey loss for LiDAR.
