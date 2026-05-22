@@ -119,6 +119,11 @@ std::shared_ptr<const GEOMETRY_T> Frame::geometryAs() const
 ///        returns the number of detected points.
 int Frame::detect()
 {
+  return detect(cv::Mat());
+}
+
+int Frame::detect(const cv::Mat & mask)
+{
   // make sure things are set to zero for safety
   keypoints_.clear();
   descriptors_.resize(0);
@@ -126,11 +131,31 @@ int Frame::detect()
   // resizing and filling in zeros in Frame::describe() as some keypoints are removed there:
   landmarkIds_.clear();
 
-  // run the detector (no mask: BRISK does not support detector masks;
-  // post-detection filtering is done in Frontend::detectAndDescribe)
+  classifications_.release();
+  isClassified_ = false;
+
+  // BRISK advertises a mask argument through OpenCV but some implementations
+  // still throw on non-empty masks, so detect first and filter immediately.
   OKVIS_ASSERT_TRUE_DBG(Exception, detector_ != nullptr,
                         "Detector not initialised!")
   detector_->detect(image_, keypoints_);
+  if(!mask.empty()) {
+    OKVIS_ASSERT_TRUE(
+        Exception,
+        mask.type() == CV_8UC1 && mask.rows == image_.rows && mask.cols == image_.cols,
+        "mask must be CV_8UC1 and have image dimensions")
+    std::vector<cv::KeyPoint> kept;
+    kept.reserve(keypoints_.size());
+    for(const cv::KeyPoint& keypoint : keypoints_) {
+      const int u = int(std::round(keypoint.pt.x));
+      const int v = int(std::round(keypoint.pt.y));
+      if(u >= 0 && u < mask.cols && v >= 0 && v < mask.rows &&
+         mask.at<uchar>(v, u) != 0) {
+        kept.push_back(keypoint);
+      }
+    }
+    keypoints_.swap(kept);
+  }
   return int(keypoints_.size());
 }
 
@@ -341,6 +366,8 @@ bool Frame::getLandmark(size_t keypointIdx, Eigen::Vector4d & landmark, bool & i
 // provide keypoints externally
 inline bool Frame::resetKeypoints(const std::vector<cv::KeyPoint> & keypoints) {
   keypoints_ = keypoints;
+  classifications_.release();
+  isClassified_ = false;
 
   // resizing
   landmarkIds_ = std::vector<uint64_t>(keypoints_.size(),0);

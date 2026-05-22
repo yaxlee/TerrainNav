@@ -207,6 +207,11 @@ class Frontend : public ViFrontendInterface {
     detectionMaskRects_ = rects;
   }
 
+  /// @brief Set whether CNN semantic masks should filter detected keypoints.
+  void setUseCnn(bool useCnn) {
+    useCnn_ = useCnn;
+  }
+
   /// @}
   /// @name Setters related to the BRISK descriptor
   /// @{
@@ -239,7 +244,7 @@ class Frontend : public ViFrontendInterface {
 
   /// @}
 
-  /// \brief Stop all CNN background threads.
+  /// \brief Compatibility no-op; CNN classification is not run in background.
   void endCnnThreads();
 
   /// \brief Clears and resets everything (so you can re-start).
@@ -266,6 +271,7 @@ private:
 
   bool isInitialized_;        ///< Is the pose initialised?
   const size_t numCameras_;   ///< Number of cameras in the configuration.
+  bool useCnn_;               ///< Whether to use CNN semantics in the frontend.
   std::vector<cv::Rect> detectionMaskRects_; ///< Rectangles excluded from feature detection.
 
   /// @name BRISK detection parameters
@@ -523,9 +529,6 @@ private:
       AlignedVector<Eigen::Vector4d>& hps_W, std::vector<size_t>& ctrs) const;
 
   std::atomic_bool trackingLost_; ///< Is the tracking currently lost?
-
-  /// \brief Hacky: remember which CNNs are running on what frame.
-  std::map<StateId,std::vector<std::thread*>> cnnThreads_;
 
   AlignedVector<Component> components_; ///< Loaded other components.
   std::vector<std::unique_ptr<DBoW>> componentDBows_; ///< Corresponding DBoWs for place recogn.

@@ -157,6 +157,12 @@ class MultiFrame
   /// \return The number of detected points.
   inline int detect(size_t cameraIdx);
 
+  /// \brief Detect keypoints with a detector mask.
+  /// @param[in] cameraIdx The camera index.
+  /// @param[in] mask A CV_8UC1 mask where non-zero pixels may produce keypoints.
+  /// \return The number of detected points.
+  inline int detect(size_t cameraIdx, const cv::Mat & mask);
+
   /// \brief Describe keypoints. This uses virtual function calls.
   ///        That's a negligibly small overhead for many detections.
   /// @param[in] cameraIdx The camera index.
@@ -183,6 +189,15 @@ class MultiFrame
   /// @param[in] sizeV Segmentation input size v.
   /// \return the number of detected points.
   inline int computeClassifications(size_t cameraIdx, int sizeU=192, int sizeV=192);
+
+  /// \brief Compute a CNN semantic detector mask.
+  /// @param[in] cameraIdx The camera index.
+  /// @param[out] mask A CV_8UC1 mask where semantic sky/person pixels are zero.
+  /// @param[in] sizeU Segmentation input size u.
+  /// @param[in] sizeV Segmentation input size v.
+  /// \return The number of allowed pixels in the mask.
+  inline int computeDetectionMask(size_t cameraIdx, cv::Mat & mask, int sizeU=192,
+                                  int sizeV=192);
 
   /// \brief Access a specific keypoint in OpenCV format
   /// @param[in] cameraIdx The camera index.

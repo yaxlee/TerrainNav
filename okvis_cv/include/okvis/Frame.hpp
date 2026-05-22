@@ -131,6 +131,11 @@ class Frame
   /// \return The number of detected points.
   inline int detect();
 
+  /// \brief Detect keypoints with a detector mask.
+  /// @param[in] mask A CV_8UC1 mask where non-zero pixels may produce keypoints.
+  /// \return The number of detected points.
+  inline int detect(const cv::Mat & mask);
+
   /// \brief Describe keypoints. This uses virtual function calls.
   ///        That's a negligibly small overhead for many detections.
   /// \return The number of detected points.
@@ -150,6 +155,11 @@ class Frame
   /// \brief Classify keypoints with CNN.
   /// \return the number of detected points.
   int computeClassifications(int sizeU=192, int sizeV=192, int numThreads = 1);
+
+  /// \brief Compute a CNN semantic detector mask.
+  /// @param[out] mask A CV_8UC1 mask where semantic sky/person pixels are zero.
+  /// \return The number of allowed pixels in the mask.
+  int computeDetectionMask(cv::Mat & mask, int sizeU=192, int sizeV=192, int numThreads = 1);
 
   /// \brief Access a specific keypoint in OpenCV format
   /// @param[in] keypointIdx The requested keypoint's index.

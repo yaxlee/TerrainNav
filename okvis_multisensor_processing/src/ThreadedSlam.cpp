@@ -81,6 +81,7 @@ void ThreadedSlam::init()
   frontend_.setBriskDetectionMaximumKeypoints(size_t(parameters_.frontend.max_num_keypoints));
   frontend_.setKeyframeInsertionOverlapThreshold(float(parameters_.frontend.keyframe_overlap));
   frontend_.setDetectionMaskRects(parameters_.frontend.mask_rects);
+  frontend_.setUseCnn(parameters_.frontend.use_cnn);
 
   // setup estimator
   estimator_.addImu(parameters_.imu);

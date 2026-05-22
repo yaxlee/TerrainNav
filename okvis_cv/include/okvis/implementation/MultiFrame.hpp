@@ -185,6 +185,12 @@ int MultiFrame::detect(size_t cameraIdx)
   return frames_[cameraIdx].detect();
 }
 
+int MultiFrame::detect(size_t cameraIdx, const cv::Mat & mask)
+{
+  OKVIS_ASSERT_TRUE_DBG(Exception, cameraIdx < frames_.size(), "Out of range")
+  return frames_[cameraIdx].detect(mask);
+}
+
 // Describe keypoints. This uses virtual function calls.
 ///        That's a negligibly small overhead for many detections.
 ///        returns the number of detected points.
@@ -212,6 +218,12 @@ bool MultiFrame::getBackProjection(size_t cameraIdx, size_t keypointIdx,
 inline int MultiFrame::computeClassifications(size_t cameraIdx, int sizeU, int sizeV) {
   OKVIS_ASSERT_TRUE_DBG(Exception, cameraIdx < frames_.size(), "Out of range")
   return frames_[cameraIdx].computeClassifications(sizeU, sizeV);
+}
+
+inline int MultiFrame::computeDetectionMask(size_t cameraIdx, cv::Mat & mask, int sizeU,
+                                            int sizeV) {
+  OKVIS_ASSERT_TRUE_DBG(Exception, cameraIdx < frames_.size(), "Out of range")
+  return frames_[cameraIdx].computeDetectionMask(mask, sizeU, sizeV);
 }
 
 // Access a specific keypoint in OpenCV format

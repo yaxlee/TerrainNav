@@ -85,6 +85,7 @@
 namespace okvis {
 
 static const double kptrad = 0.09;
+static constexpr bool kUseRandomRansacSeed = false;
 //cv::Ptr<cv::CLAHE> mClahe;
 
 /// \brief Opaque stuct to use DBoW for loop closure.
@@ -118,6 +119,7 @@ class Frontend::DBoW {
 Frontend::Frontend(size_t numCameras, std::string dBowVocDir)
     : isInitialized_(false),
       numCameras_(numCameras),
+      useCnn_(false),
       briskDetectionOctaves_(0),
       briskDetectionThreshold_(40.0),
       briskDetectionAbsoluteThreshold_(200.0),
@@ -156,9 +158,7 @@ Frontend::Frontend(size_t numCameras, std::string dBowVocDir)
 #endif
 }
 
-Frontend::~Frontend() {
-  endCnnThreads();
-}
+Frontend::~Frontend() = default;
 
 bool Frontend::loadComponent(std::string filename,
                              const ImuParameters &imuParameters,
@@ -251,13 +251,56 @@ bool Frontend::detectAndDescribe(size_t cameraIndex, std::shared_ptr<okvis::Mult
     maskLogged = true;
   }
 
-  // detect (BRISK does not support detector-level masks; filtering is done below)
-  frameOut->detect(cameraIndex);
+  const cv::Size imgSize = frameOut->image(cameraIndex).size();
+  const cv::Rect imgBounds(0, 0, imgSize.width, imgSize.height);
+  cv::Mat detectionMask;
+  if(!detectionMaskRects_.empty()) {
+    detectionMask = cv::Mat(imgSize, CV_8UC1, cv::Scalar(255));
+    for(const cv::Rect& r : detectionMaskRects_) {
+      const cv::Rect clipped = r & imgBounds;
+      if(clipped.area() > 0) {
+        detectionMask(clipped).setTo(0);
+      }
+    }
+  }
+
+#ifdef OKVIS_USE_NN
+  if(useCnn_) {
+    const cv::Mat& image = frameOut->image(cameraIndex);
+    const int sizeU = 64 * (image.cols / 64);
+    const int sizeV = 64 * (image.rows / 64);
+    if(sizeU > 0 && sizeV > 0) {
+      cv::Mat cnnDetectionMask;
+      const int allowedPixels =
+          frameOut->computeDetectionMask(cameraIndex, cnnDetectionMask, sizeU, sizeV);
+      if(detectionMask.empty()) {
+        detectionMask = cnnDetectionMask;
+      } else {
+        cv::bitwise_and(detectionMask, cnnDetectionMask, detectionMask);
+      }
+      static size_t cnnMaskLogCount = 0;
+      if(cnnMaskLogCount < 20) {
+        LOG(INFO) << "[CNN mask] camera " << cameraIndex
+                  << ": semantic detector mask active, allowed pixels="
+                  << allowedPixels << "/" << image.total() << ".";
+        ++cnnMaskLogCount;
+      }
+    }
+  }
+#else
+  OKVIS_ASSERT_TRUE(Exception, !useCnn_,
+                    "Requested CNN keypoint mask, but not compiled with USE_NN option.")
+#endif
+
+  // detect
+  if(detectionMask.empty()) {
+    frameOut->detect(cameraIndex);
+  } else {
+    frameOut->detect(cameraIndex, detectionMask);
+  }
 
   // Post-detection filter: remove keypoints inside excluded regions.
   if(!detectionMaskRects_.empty()) {
-    const cv::Size imgSize = frameOut->image(cameraIndex).size();
-    const cv::Rect imgBounds(0, 0, imgSize.width, imgSize.height);
     std::vector<cv::KeyPoint> kept;
     const size_t n = frameOut->numKeypoints(cameraIndex);
     kept.reserve(n);
@@ -316,19 +359,6 @@ bool Frontend::verifyRecognisedPlace(const Estimator &estimator,
       if (landmark.norm() < 1.0e-12) {
         continue; // bit of a hack, signals there was no associated 3d point
       }
-#ifdef OKVIS_USE_NN
-      if (params.frontend.use_cnn && oldFrame->isClassified(im)) {
-        // make sure not to use sky or person points here
-        cv::Mat classification;
-        oldFrame->getClassification(im, kOld, classification);
-        if (classification.at<float>(10) > 3.5f) { // Sky
-          continue;
-        }
-        if (classification.at<float>(11) > 53.5f) { // Person
-          continue;
-        }
-      }
-#endif
       auto iter = descriptors.find(LandmarkId(lmId));
       if (iter != descriptors.end()) {
         // just add descriptor
@@ -388,7 +418,8 @@ bool Frontend::verifyRecognisedPlace(const Estimator &estimator,
     LoopclosureAbsoluteModel;
   opengv::sac::Ransac<LoopclosureAbsoluteModel> ransac;
   std::shared_ptr<LoopclosureAbsoluteModel> absposeproblem_ptr(
-    new LoopclosureAbsoluteModel(adapter, LoopclosureAbsoluteModel::Algorithm::GP3P));
+    new LoopclosureAbsoluteModel(adapter, LoopclosureAbsoluteModel::Algorithm::GP3P,
+                                 kUseRandomRansacSeed));
   ransac.sac_model_ = absposeproblem_ptr;
   ransac.threshold_ = 16;
   ransac.max_iterations_ = 50;
@@ -988,48 +1019,6 @@ bool Frontend::dataAssociationAndInitialization(
     }
   }
 
-
-#ifdef OKVIS_USE_NN
-  // This needs to be after keyframe re-decision, otherwise we might delete a frame before the CNN
-  // finishes. This could obviously be done in a smarter way though.
-  if(params.frontend.use_cnn && isInitialized_) {
-    if(*asKeyframe) {
-      // clean up threads if still running
-      std::set<StateId> toDelete;
-      for(auto threads = cnnThreads_.begin(); threads != cnnThreads_.end(); ++threads) {
-        bool deleting = true;
-        for(size_t i=0; i<threads->second.size(); ++i) {
-          //if(threads->second[i] && estimator.multiFrame(StateId(threads->first))->isClassified(i)) {
-            threads->second[i]->join();
-            delete threads->second[i];
-            threads->second[i] = nullptr;
-          //} else {
-          //  deleting = false;
-          //}
-        }
-        if(deleting) {
-          toDelete.insert(StateId(threads->first));
-        }
-      }
-      for(const auto & deleting : toDelete) {
-        cnnThreads_.erase(deleting);
-      }
-
-      // launch classification in background
-      cnnThreads_[StateId(framesInOut->id())] = std::vector<std::thread*>(
-            params.nCameraSystem.numCameras(), nullptr);
-      for (size_t i = 0; i < params.nCameraSystem.numCameras(); ++i) {
-        cnnThreads_[StateId(framesInOut->id())].at(i) =
-            new std::thread(&MultiFrame::computeClassifications,framesInOut.get(), i,
-                      64*(framesInOut->image(i).cols/64), 64*(framesInOut->image(i).rows/64));
-      }
-    }
-  }
-#else
-  OKVIS_ASSERT_TRUE(Exception, !params.frontend.use_cnn,
-                    "Requested CNN classification, but not compiled with USE_NN option.")
-#endif
-
   // do stereo match -- get new landmarks only when this is a keyframe
   if(*asKeyframe) {
     TimerSwitchable matchStereoTimer("2.10 match stereo");
@@ -1108,49 +1097,6 @@ bool Frontend::dataAssociationAndInitialization(
     break;
   } //ToDo:EUCM
 
-#ifdef OKVIS_USE_NN
-  if(params.frontend.use_cnn) {
-    // remove matches into dynamic areas
-    // get all landmarks
-    MapPoints pointMap;
-    estimator.getLandmarks(pointMap);
-    for(MapPoints::iterator it = pointMap.begin(); it != pointMap.end(); ++it) {
-      bool remove = false;
-      if(it->second.classification == 10 || it->second.classification == 11) {
-        remove = true;
-      } else {
-      for(auto& obs : it->second.observations) {
-        if(!estimator.isKeyframe(StateId(obs.frameId))) continue;
-        auto frame = estimator.multiFrame(StateId(obs.frameId));
-        if(!frame->isClassified(obs.cameraIndex)) continue;
-        cv::Mat classification;
-        if(frame->getClassification(obs.cameraIndex, obs.keypointIndex, classification)) {
-          if(classification.at<float>(10) > 3.5f) { // Sky
-            remove = true;
-            Eigen::Vector2d kpt;
-            frame->getKeypoint(obs.cameraIndex, obs.keypointIndex, kpt);
-            estimator.setLandmarkClassification(it->first, 10);
-            break;
-          }
-          if(classification.at<float>(11) > 53.5f) { // Person
-            remove = true;
-            estimator.setLandmarkClassification(it->first, 11);
-            break;
-          }
-        }
-      }
-      }
-      if(remove) {
-        std::set<KeypointIdentifier> observations = it->second.observations;
-        for(auto& obs : observations) {
-          estimator.setObservationInformation(
-                StateId(obs.frameId), obs.cameraIndex, obs.keypointIndex,
-                Eigen::Matrix2d::Identity()*0.0001);
-        }
-      }
-    }
-  }
-#endif
   estimator.cleanUnobservedLandmarks();
 
   return trackingQuality >= 0.01;
@@ -1176,20 +1122,10 @@ bool Frontend::propagation(
 }
 
 void Frontend::endCnnThreads() {
-  for(auto & threads : cnnThreads_) {
-    for(auto & thread : threads.second) {
-      if(thread) {
-        thread->join();
-        delete thread;
-        thread = nullptr;
-      }
-    }
-  }
 }
 
 void Frontend::clear()
 {
-  endCnnThreads();
   isInitialized_ = false;        // Is the pose initialised?
   dBow_->database.clear();
   dBow_->poseIds.clear(); // Store the multiframe IDs corresponsind to the dBow ones
@@ -1496,11 +1432,6 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
       if(landmarkToMatch.descriptors.rows==0) {
         // no observations -- weird.
         continue;
-      }
-
-      // check classification
-      if (it->second.classification == 10 || it->second.classification == 11) {
-        landmarkToMatch.ignore = true;
       }
 
       // insert
@@ -2461,7 +2392,8 @@ bool Frontend::runRansac3d2d(
         opengv::absolute_pose::FrameNoncentralAbsoluteAdapter> AbsoluteModel;
   opengv::sac::Ransac<AbsoluteModel> ransac;
   std::shared_ptr<AbsoluteModel> absposeproblem_ptr(
-        new AbsoluteModel(adapter, AbsoluteModel::Algorithm::GP3P));
+        new AbsoluteModel(adapter, AbsoluteModel::Algorithm::GP3P,
+                          kUseRandomRansacSeed));
   ransac.sac_model_ = absposeproblem_ptr;
   ransac.threshold_ = 16;
   ransac.max_iterations_ = 50;
@@ -2536,7 +2468,7 @@ int Frontend::runRansac2d2d(Estimator &estimator, const okvis::ViParameters& par
         FrameRotationOnlySacProblem;
     opengv::sac::Ransac<FrameRotationOnlySacProblem> rotation_only_ransac;
     std::shared_ptr<FrameRotationOnlySacProblem> rotation_only_problem_ptr(
-          new FrameRotationOnlySacProblem(adapter));
+          new FrameRotationOnlySacProblem(adapter, kUseRandomRansacSeed));
     rotation_only_ransac.sac_model_ = rotation_only_problem_ptr;
     rotation_only_ransac.threshold_ = 9;
     rotation_only_ransac.max_iterations_ = 50;
@@ -2553,7 +2485,8 @@ int Frontend::runRansac2d2d(Estimator &estimator, const okvis::ViParameters& par
         FrameRelativePoseSacProblem;
     opengv::sac::Ransac<FrameRelativePoseSacProblem> rel_pose_ransac;
     std::shared_ptr<FrameRelativePoseSacProblem> rel_pose_problem_ptr(
-          new FrameRelativePoseSacProblem(adapter, FrameRelativePoseSacProblem::STEWENIUS));
+          new FrameRelativePoseSacProblem(adapter, FrameRelativePoseSacProblem::STEWENIUS,
+                                          kUseRandomRansacSeed));
     rel_pose_ransac.sac_model_ = rel_pose_problem_ptr;
     rel_pose_ransac.threshold_ = 9;  //(1.0 - cos(0.5/600));
     rel_pose_ransac.max_iterations_ = 50;
