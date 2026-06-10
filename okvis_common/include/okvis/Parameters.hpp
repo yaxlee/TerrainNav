@@ -185,6 +185,7 @@ struct GpsParameters {
     double gpsMaxYawCorrection; ///< Maximum allowed T_GW yaw correction [deg] for GPS loop closure (<=0 disables).
     int gpsMinInitPoints; ///< Minimum number of GPS points required for Umeyama alignment (higher = more robust, especially during sharp turns)
     int gpsMinReInitPoints; ///< Minimum GPS points required for re-initialization after GPS dropout.
+    int gpsMaxInitBufferPoints; ///< Maximum persistent GPS init buffer size; <=0 disables the cap.
     double gpsMaxSpeed; ///< Maximum accepted GPS horizontal speed [m/s] between consecutive accepted reader-side measurements (<=0 disables)
 
     double maxHErr; ///< Maximum horizontal error [m] for GPS bad-point filtering (reader-side)
@@ -217,6 +218,7 @@ struct GpsParameters {
                       gpsMaxCorrection(50.0), gpsMaxYawCorrection(0.0),
                       gpsMinInitPoints(10),
                       gpsMinReInitPoints(10),
+                      gpsMaxInitBufferPoints(0),
                       gpsMaxSpeed(1e9),
                       maxHErr(1e9), maxVErr(1e9), minFixStatus(0), geoidModel("")
                       {}

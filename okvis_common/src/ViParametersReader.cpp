@@ -767,6 +767,8 @@ bool ViParametersReader::getGpsCalibration(const cv::FileNode& calibrationNode, 
              gpsParameters.gpsMinInitPoints);
   parseEntry(calibrationNode, "gps_min_reinit_points",
              gpsParameters.gpsMinReInitPoints);
+  parseEntry(calibrationNode, "gps_max_init_buffer_points",
+             gpsParameters.gpsMaxInitBufferPoints);
   parseEntry(calibrationNode, "gps_max_speed",
              gpsParameters.gpsMaxSpeed);
   parseEntry(calibrationNode, "max_h_err",

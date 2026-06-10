@@ -1499,6 +1499,14 @@ bool ViGraph::addGpsMeasurement(StateId poseId, GpsMeasurement &gpsMeas, const I
       pair.worldPos = T_WS_prop.r() + T_WS_prop.C() * gpsParametersVec_.back().r_SA;
       pair.cov     = safeCovariance;
       gpsInitPointBuffer_.push_back(pair);
+      const int maxInitBufferPoints = gpsParametersVec_.back().gpsMaxInitBufferPoints;
+      if(maxInitBufferPoints > 0 &&
+         gpsInitPointBuffer_.size() > static_cast<size_t>(maxInitBufferPoints)) {
+        const size_t excess =
+            gpsInitPointBuffer_.size() - static_cast<size_t>(maxInitBufferPoints);
+        gpsInitPointBuffer_.erase(
+            gpsInitPointBuffer_.begin(), gpsInitPointBuffer_.begin() + excess);
+      }
     }
 
     return true;
@@ -1656,6 +1664,13 @@ bool ViGraph::checkForGpsInit(okvis::kinematics::Transformation& T_GW, std::set<
           ? gpsParametersVec_.back().gpsMinReInitPoints
           : gpsParametersVec_.back().gpsMinInitPoints;
   const size_t minPoints = static_cast<size_t>(std::max(3, configuredMinPoints));
+  const int maxInitBufferPoints = gpsParametersVec_.back().gpsMaxInitBufferPoints;
+  if(gpsParametersVec_.back().robustGpsInit && maxInitBufferPoints > 0 &&
+     minPoints > static_cast<size_t>(maxInitBufferPoints)) {
+    LOG(WARNING) << "[GPS Init] Configured minimum points (" << minPoints
+                 << ") exceeds gps_max_init_buffer_points=" << maxInitBufferPoints
+                 << "; robust GPS init cannot satisfy this requirement.";
+  }
   if(gpsPoints.size() < minPoints){
     LOG(INFO) << "[GPS Init] Waiting: only " << gpsPoints.size()
               << " GPS points collected (need >= " << minPoints << ")";
