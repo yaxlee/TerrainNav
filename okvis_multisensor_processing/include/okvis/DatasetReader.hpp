@@ -22,6 +22,8 @@
 #include <fstream>
 #include <atomic>
 #include <thread>
+#include <array>
+#include <vector>
 
 #include <glog/logging.h>
 
@@ -61,6 +63,11 @@ public:
                 const std::optional<GpsParameters>& gpsParameters = std::nullopt,
                 const std::optional<DemParameters>& demParameters = std::nullopt,
                 const std::string& demPath = "");
+  DatasetReader(const std::string& path, size_t numCameras, const std::set<size_t> & syncCameras,
+                const Duration & deltaT,
+                const std::optional<GpsParameters>& gpsParameters,
+                const std::optional<DemParameters>& demParameters,
+                const std::vector<std::string>& demPaths);
 
   /// @brief Destructor: stops streaming.
   virtual ~DatasetReader();
@@ -140,10 +147,19 @@ private:
   bool useDemHeightForGps_ = false; ///< If true: replace GPS alt with DEM alt in reader; if false: blend in backend
   double demSigmaH_ = 2.0;          ///< Vertical uncertainty [m] used when DEM replaces GPS altitude
 
-  GDALDataset* demDataset_ = nullptr; ///< GDAL 数据集指针，用于读取 .tif 文件
-  double adfGeoTransform_[6];        ///< 存储 DEM 的 6 参数仿射变换
-  float noDataValue_; // 存储从tif读取的nodata值
-  OGRCoordinateTransformation* poCT_ = nullptr;
+  struct DemDataset {
+    std::string path;
+    GDALDataset* dataset = nullptr;
+    std::array<double, 6> geoTransform = {};
+    bool hasNoData = false;
+    double noDataValue = 0.0;
+    OGRCoordinateTransformation* coordinateTransformation = nullptr;
+  };
+
+  bool loadDemDataset(const std::string& demPath);
+  double getDemHeight(const DemDataset& demDataset, double lat, double lon) const;
+
+  std::vector<DemDataset> demDatasets_; ///< Ordered DEM datasets used for fallback lookup.
 
 public:
   /// @brief Query terrain height from DEM at a given geodetic coordinate.

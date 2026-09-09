@@ -17,9 +17,11 @@
  */
  
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <sstream>
+#include <vector>
 
 #include <boost/filesystem.hpp>
 #include <opencv2/core/core.hpp>
@@ -54,6 +56,14 @@ DatasetReader::DatasetReader(
   const std::string& path, size_t numCameras, const std::set<size_t> &syncCameras,
   const Duration & deltaT, const std::optional<GpsParameters>& gpsParameters,
   const std::optional<DemParameters>& demParameters, const std::string& demPath) :
+  DatasetReader(path, numCameras, syncCameras, deltaT, gpsParameters, demParameters,
+                demPath.empty() ? std::vector<std::string>() : std::vector<std::string>{demPath}) {
+}
+
+DatasetReader::DatasetReader(
+  const std::string& path, size_t numCameras, const std::set<size_t> &syncCameras,
+  const Duration & deltaT, const std::optional<GpsParameters>& gpsParameters,
+  const std::optional<DemParameters>& demParameters, const std::vector<std::string>& demPaths) :
   numCameras_(numCameras), syncCameras_(syncCameras), deltaT_(deltaT) {
   if (demParameters) {
     useDemHeightForGps_ = (*demParameters).useDemHeightForGps;
@@ -80,30 +90,15 @@ DatasetReader::DatasetReader(
       }
     }
 
-    if (!demPath.empty()) {
+    if (!demPaths.empty()) {
       GDALAllRegister();
-      demDataset_ = (GDALDataset*)GDALOpen(demPath.c_str(), GA_ReadOnly);
-      if (demDataset_ != nullptr) {
-          demDataset_->GetGeoTransform(adfGeoTransform_);
-
-          OGRSpatialReference oSourceSRS, oTargetSRS;
-          oSourceSRS.importFromEPSG(4326); // WGS84
-
-          const char* pszProjection = demDataset_->GetProjectionRef();
-          oTargetSRS.importFromWkt(pszProjection);
-
-          oSourceSRS.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
-          oTargetSRS.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
-
-          poCT_ = OGRCreateCoordinateTransformation(&oSourceSRS, &oTargetSRS);
-
-          GDALRasterBand* band = demDataset_->GetRasterBand(1);
-          int hasNoData;
-          noDataValue_ = band->GetNoDataValue(&hasNoData);
-          LOG(INFO) << "DEM loaded. Target CRS: " << oTargetSRS.GetName();
-
+      for (const std::string& demPath : demPaths) {
+        loadDemDataset(demPath);
+      }
+      if (demDatasets_.empty()) {
+        LOG(ERROR) << "No DEM datasets could be loaded from " << demPaths.size() << " path(s).";
       } else {
-          LOG(ERROR) << "Failed to load DEM at " << demPath;
+        LOG(INFO) << "Loaded " << demDatasets_.size() << " DEM dataset(s); lookup uses input order.";
       }
     }
   }
@@ -118,54 +113,123 @@ DatasetReader::DatasetReader(
 
 DatasetReader::~DatasetReader() {
   stopStreaming();
-  if (poCT_) {
-    OGRCoordinateTransformation::DestroyCT(poCT_);
-    poCT_ = nullptr;
-    LOG(INFO) << "GDAL Coordinate Transformation object destroyed.";
-  }
+  for (DemDataset& demDataset : demDatasets_) {
+    if (demDataset.coordinateTransformation) {
+      OGRCoordinateTransformation::DestroyCT(demDataset.coordinateTransformation);
+      demDataset.coordinateTransformation = nullptr;
+      LOG(INFO) << "GDAL Coordinate Transformation object destroyed for " << demDataset.path;
+    }
 
-  // 3. 关闭 GDAL 数据集 [cite: 899]
-  if (demDataset_) {
-    GDALClose(demDataset_);
-    demDataset_ = nullptr;
-    LOG(INFO) << "GDAL Dataset closed.";
+    if (demDataset.dataset) {
+      GDALClose(demDataset.dataset);
+      demDataset.dataset = nullptr;
+      LOG(INFO) << "GDAL Dataset closed: " << demDataset.path;
+    }
   }
 }
 
-// DEM Reader
-double DatasetReader::getDemHeight(double lat, double lon) {
-  
-  if (!demDataset_ || !poCT_) return -1.0;
+bool DatasetReader::loadDemDataset(const std::string& demPath) {
+  DemDataset demDataset;
+  demDataset.path = demPath;
+  demDataset.dataset = static_cast<GDALDataset*>(GDALOpen(demPath.c_str(), GA_ReadOnly));
+  if (demDataset.dataset == nullptr) {
+    LOG(ERROR) << "Failed to load DEM at " << demPath;
+    return false;
+  }
+
+  if (demDataset.dataset->GetGeoTransform(demDataset.geoTransform.data()) != CE_None) {
+    LOG(ERROR) << "Failed to read DEM geo transform at " << demPath;
+    GDALClose(demDataset.dataset);
+    return false;
+  }
+
+  OGRSpatialReference oSourceSRS, oTargetSRS;
+  oSourceSRS.importFromEPSG(4326); // WGS84
+
+  const char* pszProjection = demDataset.dataset->GetProjectionRef();
+  if (pszProjection == nullptr || oTargetSRS.importFromWkt(pszProjection) != OGRERR_NONE) {
+    LOG(ERROR) << "Failed to read DEM projection at " << demPath;
+    GDALClose(demDataset.dataset);
+    return false;
+  }
+
+  oSourceSRS.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
+  oTargetSRS.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
+
+  demDataset.coordinateTransformation = OGRCreateCoordinateTransformation(&oSourceSRS, &oTargetSRS);
+  if (demDataset.coordinateTransformation == nullptr) {
+    LOG(ERROR) << "Failed to create DEM coordinate transformation at " << demPath;
+    GDALClose(demDataset.dataset);
+    return false;
+  }
+
+  GDALRasterBand* band = demDataset.dataset->GetRasterBand(1);
+  if (band == nullptr) {
+    LOG(ERROR) << "Failed to read DEM raster band at " << demPath;
+    OGRCoordinateTransformation::DestroyCT(demDataset.coordinateTransformation);
+    GDALClose(demDataset.dataset);
+    return false;
+  }
+
+  int hasNoData = 0;
+  demDataset.noDataValue = band->GetNoDataValue(&hasNoData);
+  demDataset.hasNoData = hasNoData != 0;
+
+  LOG(INFO) << "DEM loaded: " << demPath << ". Target CRS: " << oTargetSRS.GetName();
+  demDatasets_.push_back(demDataset);
+  return true;
+}
+
+double DatasetReader::getDemHeight(const DemDataset& demDataset, double lat, double lon) const {
+  if (!demDataset.dataset || !demDataset.coordinateTransformation) return -1.0;
 
   double x = lon;
   double y = lat;
-  if (!poCT_->Transform(1, &x, &y)) {
+  if (!demDataset.coordinateTransformation->Transform(1, &x, &y)) {
     return -1.0;
   }
 
-  double d = adfGeoTransform_[1] * adfGeoTransform_[5] - adfGeoTransform_[2] * adfGeoTransform_[4];
-  int pixel = static_cast<int>((adfGeoTransform_[5] * (x - adfGeoTransform_[0]) - 
-                                adfGeoTransform_[2] * (y - adfGeoTransform_[3])) / d);
-  int line = static_cast<int>((adfGeoTransform_[1] * (y - adfGeoTransform_[3]) - 
-                               adfGeoTransform_[4] * (x - adfGeoTransform_[0])) / d);
+  const auto& geoTransform = demDataset.geoTransform;
+  double d = geoTransform[1] * geoTransform[5] - geoTransform[2] * geoTransform[4];
+  int pixel = static_cast<int>((geoTransform[5] * (x - geoTransform[0]) -
+                                geoTransform[2] * (y - geoTransform[3])) / d);
+  int line = static_cast<int>((geoTransform[1] * (y - geoTransform[3]) -
+                               geoTransform[4] * (x - geoTransform[0])) / d);
 
-  if (pixel < 0 || pixel >= demDataset_->GetRasterXSize() || 
-      line < 0 || line >= demDataset_->GetRasterYSize()) {
+  if (pixel < 0 || pixel >= demDataset.dataset->GetRasterXSize() ||
+      line < 0 || line >= demDataset.dataset->GetRasterYSize()) {
     return -1.0;
   }
 
   float val;
-  CPLErr err = demDataset_->GetRasterBand(1)->RasterIO(
+  CPLErr err = demDataset.dataset->GetRasterBand(1)->RasterIO(
       GF_Read, pixel, line, 1, 1, &val, 1, 1, GDT_Float32, 0, 0);
 
   if (err != CE_None) {
-    LOG(WARNING) << "Failed to read DEM value at pixel " << pixel << ", line " << line;
+    LOG(WARNING) << "Failed to read DEM value at " << demDataset.path
+                 << " pixel " << pixel << ", line " << line;
     return -1.0;
   }
 
-  if (val == noDataValue_) return -1.0;
-  
+  if (demDataset.hasNoData &&
+      (static_cast<double>(val) == demDataset.noDataValue ||
+       (std::isnan(static_cast<double>(val)) && std::isnan(demDataset.noDataValue)))) {
+    return -1.0;
+  }
+
   return static_cast<double>(val);
+}
+
+// DEM Reader
+double DatasetReader::getDemHeight(double lat, double lon) {
+  for (const DemDataset& demDataset : demDatasets_) {
+    const double height = getDemHeight(demDataset, lat, lon);
+    if (height >= -100.0) {
+      return height;
+    }
+  }
+
+  return -1.0;
 }
 
 bool DatasetReader::setDatasetPath(const std::string & path) {
