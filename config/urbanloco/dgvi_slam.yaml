@@ -136,9 +136,8 @@ gps_parameters:
   geoid_model: "egm96-5"
 
 dem_parameters:
-  use: true
+  use: false
   sigma_h: 10.0
   d_above_ground: 2.13
   r_SA: [1.06045, 0.5245, 0.722376]
   use_dem_height_for_gps: true
-  dem_fusion_alpha: 0.8
