@@ -55,17 +55,7 @@ Use the converted dataset layout expected by `DatasetReader`:
 | `cam0/data/` | Images referenced by the camera CSV |
 | `imu0/data.csv` | Header, then `timestamp_ns,wx,wy,wz,ax,ay,az` |
 | `gps0/data.csv` | Geodetic GNSS records described below |
-| `dem0/.tiff` | DEM |
-
-Add `cam1`, etc. when a calibrated profile contains multiple cameras. Image filenames are relative to the camera's `data/` directory. Angular velocity is in rad/s, acceleration in m/s². Camera, IMU, and GNSS timestamps must use a consistent clock and epoch; the current reader applies no GNSS leap-second offset.
-
-For `gps_parameters.data_type: geodetic`, each GNSS row starts with:
-
-```text
-timestamp_ns,latitude_deg,longitude_deg,altitude_m,horizontal_error_m,vertical_error_m
-```
-
-An optional extended row contains `vx,vy,vz,vel_dt,cov_type,fix_status` after those six fields. The current reader extracts `fix_status` from column 12; it derives velocity constraints from position fixes rather than consuming the velocity columns. Error fields represent standard deviations, not variances. The exported status convention must match `min_fix_status`; do not copy a different receiver's status codes without checking their meaning.
+| `dem0/.tif` | DEM |
 
 DEM rasters are supplied separately as GeoTIFF (`.tif`/`.tiff`) or GDAL VRT files. Rasters must contain usable georeferencing and cover the route. Multiple rasters are queried in command-line order, using the first valid height. GNSS altitude, DEM height, sensor height, and the selected geoid model must follow a consistent vertical convention. See [configuration guidance](config/README.md).
 
@@ -75,12 +65,10 @@ Choose a profile and verify its calibration and acquisition settings:
 
 | Profile | Purpose |
 |---|---|
-| [Field](config/field/dgvi_slam.yaml) | Existing field-system calibration and DEM-enabled settings |
-| [FusionPortableV2 + DEM](config/fusionportable/dgvi_slam.yaml) | Existing FusionPortable profile with DEM |
-| [FusionPortableV2 GNSS](config/fusionportable/gnss_only.yaml) | Existing GNSS-only profile |
-| [UrbanLoco](config/urbanloco/dgvi_slam.yaml) | Existing UrbanLoco profile with DEM enabled |
+| [Field](config/field/dgvi_slam.yaml) | Field-system profile|
+| [FusionPortableV2 + DEM](config/fusionportable/dgvi_slam.yaml) | FusionPortableV2 profile |
+| [UrbanLoco](config/urbanloco/dgvi_slam.yaml) | UrbanLoco profile |
 
-These are the configurations present in the source snapshot, not a complete per-sequence parameter archive. In particular, the two FusionPortable profiles also differ in the image mask and optimization-window sizes. For a controlled DEM ablation, copy one profile and change only `dem_parameters.use`, retaining the same input data and all other settings.
 
 ```bash
 # Camera + IMU + GNSS + one or more DEM tiles
@@ -90,15 +78,7 @@ These are the configurations present in the source snapshot, not a complete per-
 # GNSS-only profile
 ./build/dgvi_slam_app config/fusionportable/gnss_only.yaml \
   /path/to/sequence results/fusionportable
-
-# Record configuration, command, exit code, and log in a unique run directory
-./scripts/run_and_log.sh config/field/dgvi_slam.yaml \
-  /path/to/sequence results/field /path/to/tile1.tif /path/to/tile2.tif
 ```
-
-The application accepts `CONFIG DATASET [OUTPUT_DIR] [DEM ...] [-rpg]`; the default output directory is `results` in the current working directory. The inherited `-rpg` reader is not a DEM workflow. A DEM-enabled profile requires geodetic GNSS and at least one readable DEM raster. Setting `dem_parameters.use: false` disables DEM loading, GNSS height replacement/blending, and DEM factors.
-
-The wrapper accepts `CONFIG DATASET [OUTPUT_DIR] [DEM ...]`. Supply `OUTPUT_DIR` explicitly when passing DEM paths. For a nonstandard build directory, set `DGVI_SLAM_EXECUTABLE` to the executable's absolute path.
 
 ## Outputs and evaluation
 
@@ -113,16 +93,7 @@ For SLAM mode, output filenames start with `dgvi-slam-slam`; disabling loop clos
 | `-global-final-ba_trajectory.csv` | Corresponding global export |
 | `-final_map.csv` | Landmark map when final BA and map saving are enabled |
 
-Trajectory CSVs begin with `timestamp_ns,px,py,pz,qx,qy,qz,qw` and may contain additional state columns. Convert the first eight columns to TUM format with:
-
-```bash
-python3 tools/convert_to_tum.py results/field/dgvi-slam-slam-final_trajectory.csv
-```
-
-The converter preserves nanosecond timestamp precision, uses only the Python standard library, and refuses to overwrite an existing output. Use `-o` to select another filename.
-
-The paper uses independent INS ground truth for FusionPortableV2, GNSS-fix consistency for UrbanLoco, and offline LiDAR–inertial reference trajectories for the field sequences. Keep these reference types distinct when reporting results. Dataset recordings, DEM tiles, and evaluation outputs are not bundled here.
-
+The paper uses independent INS ground truth for FusionPortableV2, GNSS-fix consistency for UrbanLoco, and offline LiDAR–inertial reference trajectories for the field sequences. 
 ## Code map
 
 | Location | Responsibility |
