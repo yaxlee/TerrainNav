@@ -2,8 +2,6 @@
 
 **DEM-Aided Visual–Inertial SLAM with Bounded Position-Fix GNSS Recovery in Variable-Elevation Urban Environments**
 
-Yaxuan Li, Yewei Huang, Xi Lin, and Brendan Englot · Stevens Institute of Technology
-
 DGVI-SLAM combines camera and IMU measurements, position-fix GNSS, and a georeferenced digital elevation model (DEM). It builds on [OKVIS2-X](https://github.com/ethz-mrl/OKVIS2-X), retaining its visual–inertial backend and asynchronous GNSS factors while adding persistent global initialization, bounded trajectory recovery, and terrain-height constraints.
 
 ![DGVI-SLAM pipeline](docs/images/pipeline.png)
@@ -145,33 +143,3 @@ The paper uses independent INS ground truth for FusionPortableV2, GNSS-fix consi
 | `config/` | Dataset profiles and parameter guidance |
 
 The `okvis` C++ namespace, library targets, source directories, and upstream copyright notices are retained to preserve provenance and library compatibility. The CMake project and ROS package are named `dgvi_slam`. Inherited ROS node executable names and topic namespaces remain unchanged.
-
-## Citation and acknowledgments
-
-The accompanying manuscript is:
-
-```bibtex
-@misc{li2026dgvislam,
-  title = {{DGVI-SLAM}: {DEM}-Aided Visual--Inertial {SLAM} with Bounded
-           Position-Fix {GNSS} Recovery in Variable-Elevation Urban Environments},
-  author = {Li, Yaxuan and Huang, Yewei and Lin, Xi and Englot, Brendan},
-  year = {2026},
-  note = {Manuscript}
-}
-```
-
-Please also cite the underlying OKVIS2-X system when using this implementation:
-
-```bibtex
-@article{boche2025okvis2x,
-  author = {Boche, Simon and Jung, Jaehyung and Laina, Sebasti\'an Barbas and Leutenegger, Stefan},
-  title = {{OKVIS2-X}: Open Keyframe-Based Visual-Inertial {SLAM} Configurable With Dense Depth or {LiDAR}, and {GNSS}},
-  journal = {IEEE Transactions on Robotics},
-  year = {2025},
-  volume = {41},
-  pages = {6064--6083},
-  doi = {10.1109/TRO.2025.3619051}
-}
-```
-
-The repository retains the upstream [BSD 3-Clause license](LICENSE) and [contributor record](contributors.txt). Dependencies retain their respective licenses. See [review and change details](docs/CLEANUP_REVIEW.md) for this cleanup's scope and validation limits.
