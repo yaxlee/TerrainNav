@@ -82,7 +82,7 @@ estimator_parameters:
     num_loop_closure_frames: 5
     num_imu_frames: 15
     do_loop_closures: true
-    do_final_ba: false
+    do_final_ba: true
     enforce_realtime: false
     realtime_min_iterations: 2
     realtime_max_iterations: 20
