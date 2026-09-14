@@ -2,17 +2,6 @@
 
 Profiles use OpenCV FileStorage YAML (`%YAML:1.0`). The camera calibration, IMU noise, image timing, feature masks, optimization settings, and active GNSS/DEM values were preserved from the existing profiles. Verify them against the actual sequence and sensor setup before running.
 
-## File migration
-
-| Previous file | Current file |
-|---|---|
-| `config/okvis2.yaml` | `field/dgvi_slam.yaml` |
-| `config/fp_dem.yaml` | `fusionportable/dgvi_slam.yaml` |
-| `config/fp_gps.yaml` | `fusionportable/gnss_only.yaml` |
-| `config/urbanloco.yaml` | `urbanloco/dgvi_slam.yaml` |
-
-Unused EuRoC, GVINS, Hilti, RealSense, and VBR example profiles were removed. `rviz2/` is retained because the optional ROS launch files reference it. The offline application does not require an RViz or Supereight configuration.
-
 ## Parameter groups
 
 | Group | Check before use |
@@ -50,7 +39,6 @@ All four profiles explicitly disable legacy reinitialization (`gps_enable_reinit
 | `r_SA` | Lever arm used by the height factor, in the IMU frame |
 | `use_dem_height_for_gps: true` | Replace GNSS altitude with DEM terrain height in the reader; `dem_fusion_alpha` is not used in this mode |
 | `use_dem_height_for_gps: false` | Blend GNSS and DEM altitude in the backend using `dem_fusion_alpha` |
-| `dem_fusion_alpha` | GNSS weight: `0.0` uses DEM height; `1.0` uses GNSS height; intermediate values blend them |
 | `gps_parameters.geoid_model` | GeographicLib geoid grid, currently `egm96-5`; an empty string disables correction |
 
 The independent height factor remains active when DEM is enabled even if `dem_fusion_alpha` is `1.0`. Thus alpha is not the full-system DEM ablation switch.
