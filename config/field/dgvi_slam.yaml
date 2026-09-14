@@ -1,0 +1,145 @@
+%YAML:1.0
+# DGVI-SLAM dataset profile. See config/README.md for units and setup.
+cameras:
+  - {
+    T_SC:
+        [  0.02113245, -0.00881263,  0.99973784,  0.02509606,
+          -0.99974295, -0.00840052,  0.02105851,  0.0471044,
+           0.00821274, -0.99992588, -0.00898789, -0.04708322,
+           0.0,         0.0,         0.0,         1.0        ],
+
+        image_dimension: [960, 540],
+
+        focal_length: [457.0678775659748, 455.91330793145687],
+        principal_point: [479.0466997316015, 271.48876457767676],
+        distortion_coefficients: [-0.000691831828701086, 0.0005776084531271573, 0.0007899179317230896, 3.1645124960775234e-05],
+        distortion_type: radialtangential,
+        cam_model: pinhole,
+        camera_type: gray,
+        mapping: true,
+        mapping_rectification: false,
+        slam_use: okvis}
+
+camera_parameters:
+    timestamp_tolerance: 0.005
+    sync_cameras: [0]
+    image_delay: 0.07260778530900726
+    online_calibration:
+        do_extrinsics: false
+        do_extrinsics_final_ba: false
+        sigma_r: 0.01
+        sigma_alpha: 0.05
+        sigma_r_final_ba: 0.03
+        sigma_alpha_final_ba: 0.3
+    fov_scale: 1.0
+
+imu_parameters:
+    use: true
+    a_max: 150.0
+    g_max: 35.0
+    sigma_g_c: 0.002
+    sigma_a_c: 0.005
+    sigma_bg: 0.01
+    sigma_ba: 0.1
+    sigma_gw_c: 0.000004
+    sigma_aw_c: 0.00004
+    g: 9.81007
+    g0: [ 0.0, 0.0, 0.0 ]
+    a0: [ 0.0, 0.0, 0.0 ]
+    s_a: [ 1.0,  1.0, 1.0 ]
+    T_BS:
+        [1.0000, 0.0000, 0.0000, 0.0000,
+         0.0000, 1.0000, 0.0000, 0.0000,
+         0.0000, 0.0000, 1.0000, 0.0000,
+         0.0000, 0.0000, 0.0000, 1.0000]
+
+frontend_parameters:
+    detection_threshold: 35.0
+    absolute_threshold: 120.0
+    matching_threshold: 50.0
+    octaves: 0
+    max_num_keypoints: 1500
+    keyframe_overlap: 0.30
+    use_cnn: false
+    parallelise_detection: false
+    num_matching_threads: 1
+    mask_rects: [0, 430, 960, 100]
+
+stationary_parameters:
+    enabled: true
+    entry_frames: 10
+    exit_frames: 10
+    min_landmarks: 10
+    max_median_pixel_displacement: 0.45
+    max_mean_pixel_displacement: 0.90
+    sigma_v: 0.01
+    sigma_position: 0.01
+    sigma_orientation: 0.01
+    gps_recovery_pause_after_exit_frames: 150
+
+estimator_parameters:
+    num_keyframes: 11
+    num_loop_closure_frames: 5
+    num_imu_frames: 15
+    do_loop_closures: true
+    do_final_ba: false
+    enforce_realtime: false
+    realtime_min_iterations: 2
+    realtime_max_iterations: 20
+    realtime_time_limit: 0.025
+    realtime_num_threads: 1
+    full_graph_iterations: 5
+    full_graph_num_threads: 1
+    p_dbow: 0.4
+    drift_percentage_heuristic: 20.0
+
+output_parameters:
+    display_topview: false
+    display_matches: false
+    display_overhead: false
+    enable_submapping: false
+
+gps_parameters:
+  data_type: geodetic
+  r_SA: [0.0, 0.0, 0.0]
+  yaw_error_threshold: 2.0
+  robust_gps_init: true
+
+  gps_sigma_scale: 0.2
+  gps_loss_scale: 0.0
+  gps_outlier_scale: 1.0
+
+  gps_enable_reinit: false
+
+  gps_velocity_sigma: 0.1
+  gps_velocity_min_dt: 0.2
+  gps_velocity_max_dt: 5.0
+
+  gps_enable_legacy_position_alignment: false
+
+  gps_bounded_recovery_enabled: true
+  gps_bounded_recovery_residual_threshold: 5.0
+  gps_bounded_recovery_exit_threshold: 1.0
+  gps_bounded_recovery_consecutive: 2
+  gps_bounded_recovery_max_step: 5.0
+  gps_bounded_recovery_max_total: 0.0
+  gps_bounded_recovery_horizontal_only: true
+  gps_bounded_recovery_apply_in_initialised: true
+  gps_bounded_recovery_stationary_speed_threshold: 0.6
+
+  gps_min_init_points: 100
+  gps_max_init_buffer_points: 100
+
+  gps_max_speed: 20.0
+  max_h_err: 15.0
+  max_v_err: 60.0
+  min_fix_status: 1
+  geoid_model: "egm96-5"
+
+dem_parameters:
+  use: true
+  sigma_h: 10.0
+  d_above_ground: 2.13
+  r_SA: [0, 0, 0]
+  use_dem_height_for_gps: true
+  dem_fusion_alpha: 0.5

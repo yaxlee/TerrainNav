@@ -11,7 +11,7 @@
  */
 
 /**
- * @file okvis_app_synchronous.cpp
+ * @file dgvi_slam_app.cpp
  * @brief This file processes a dataset.
  * @author Stefan Leutenegger
  * @author Andreas Forster
@@ -56,38 +56,16 @@ int main(int argc, char **argv)
   FLAGS_colorlogtostderr = 1;
   FLAGS_minloglevel = 0;
 
-  // if (argc != 4 && argc != 5) {
-  //   LOG(ERROR)<<
-  //   "Usage: ./" << argv[0] << " configuration-yaml-file dataset-folder [-rpg]";
-  //   return EXIT_FAILURE;
-  // }
-
-  // okvis::Duration deltaT(0.0);
-  // bool rpg = false;
-  // std::string savePath;
-  // savePath = std::string(argv[2]);
-  // if (argc == 5) {
-  //   savePath = std::string(argv[3]);
-  //   if(strcmp(argv[4], "-rpg")==0) {
-  //     rpg = true;
-  //   }
-  // }
-  // else if (argc == 4) {
-  //   if(strcmp(argv[3], "-rpg")!=0)  {
-  //     savePath = std::string(argv[3]);
-  //   }
-  // }
-
-  // 支持可选保存路径、多个 DEM 路径，以及 -rpg。
+  // Optional output directory, DEM rasters, and inherited RPG reader.
   if (argc < 3) {
     LOG(ERROR) <<
-    "Usage: ./" << argv[0] << " configuration-yaml-file dataset-folder [save-path] [dem-path ...] [-rpg]";
+    "Usage: " << argv[0] << " configuration-yaml-file dataset-folder [save-path] [dem-path ...] [-rpg]";
     return EXIT_FAILURE;
   }
 
   okvis::Duration deltaT(0.0);
   bool rpg = false;
-  std::string savePath = std::string(argv[2]); // 默认 savePath 与 dataset 同级
+  std::string savePath = "results";
   std::vector<std::string> demPaths;
 
   auto isDemPath = [](const std::string& path) {
@@ -97,7 +75,7 @@ int main(int argc, char **argv)
     return extension == ".tif" || extension == ".tiff" || extension == ".vrt";
   };
 
-  // 简单的参数解析逻辑
+  // Collect DEM rasters and reader selection.
   for (int i = 3; i < argc; ++i) {
     std::string arg(argv[i]);
     if (arg == "-rpg") {
@@ -107,7 +85,7 @@ int main(int argc, char **argv)
     }
   }
 
-  // 处理 savePath (排除特定的参数)
+  // Select the optional output directory.
   if (argc >= 4) {
     for (int i = 3; i < argc; ++i) {
       std::string arg(argv[i]);
@@ -129,6 +107,15 @@ int main(int argc, char **argv)
   okvis::ViParametersReader viParametersReader(configFilename);
   okvis::ViParameters parameters;
   viParametersReader.getParameters(parameters);
+
+  const bool useDem = parameters.dem && parameters.dem->use;
+  if (useDem && (!parameters.gps || parameters.gps->type != "geodetic" || rpg || demPaths.empty())) {
+    LOG(ERROR) << "DEM requires the geodetic DatasetReader and at least one .tif/.tiff/.vrt raster.";
+    return EXIT_FAILURE;
+  }
+  if (!useDem) {
+    demPaths.clear();
+  }
 
   // dataset reader
   // the folder path
@@ -165,13 +152,13 @@ int main(int argc, char **argv)
   }
 
   const bool isWriteRpg = false;
-  okvis::TrajectoryOutput writer(savePath+"/okvis2-" + mode + "_trajectory.csv", isWriteRpg, parameters.output.display_topview);
+  okvis::TrajectoryOutput writer(savePath+"/dgvi-slam-" + mode + "_trajectory.csv", isWriteRpg, parameters.output.display_topview);
   estimator.setOptimisedGraphCallback(
         std::bind(&okvis::TrajectoryOutput::processState, &writer,
                   std::placeholders::_1, std::placeholders::_2, std::placeholders::_3,
                   std::placeholders::_4));
-  estimator.setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final_trajectory.csv", isWriteRpg);
-  estimator.setMapCsvFile(savePath+"/okvis2-" + mode + "-final_map.csv");
+  estimator.setFinalTrajectoryCsvFile(savePath+"/dgvi-slam-" + mode + "-final_trajectory.csv", isWriteRpg);
+  estimator.setMapCsvFile(savePath+"/dgvi-slam-" + mode + "-final_map.csv");
 
   // connect reader to estimator
   datasetReader->setImuCallback(
@@ -196,7 +183,7 @@ int main(int argc, char **argv)
     }
 
     // Register DEM callback for high-frequency height constraints (after T_GW is fixed)
-    if(!demPaths.empty() && parameters.dem) {
+    if(useDem && !demPaths.empty()) {
       auto* datasetReaderPtr = dynamic_cast<okvis::DatasetReader*>(datasetReader.get());
       if(datasetReaderPtr) {
         const double sigma_h = (*parameters.dem).sigma_h;
@@ -230,7 +217,7 @@ int main(int argc, char **argv)
     cv::Mat topView;
     writer.drawTopView(topView);
     if(!topView.empty()) {
-      cv::imshow("OKVIS 2 Top View", topView);
+      cv::imshow("DGVI-SLAM Top View", topView);
     }
     if(!images.empty() || !topView.empty()) {
       char b = cv::waitKey(2);
@@ -245,23 +232,23 @@ int main(int argc, char **argv)
       LOG(INFO) << "Finished!" << std::endl;
       estimator.writeFinalTrajectoryCsv();
       if(parameters.gps){
-        estimator.writeGlobalTrajectoryCsv(savePath+"/okvis2-" + mode + "-global-final_trajectory.csv");
+        estimator.writeGlobalTrajectoryCsv(savePath+"/dgvi-slam-" + mode + "-global-final_trajectory.csv");
       }
-      estimator.setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final-ba_trajectory.csv", isWriteRpg);
+      estimator.setFinalTrajectoryCsvFile(savePath+"/dgvi-slam-" + mode + "-final-ba_trajectory.csv", isWriteRpg);
       if(parameters.estimator.do_final_ba) {
         LOG(INFO) << "final full BA...";
         cv::Mat topView;
         estimator.doFinalBa();
         writer.drawTopView(topView);
         if (!topView.empty()) {
-          cv::imshow("OKVIS 2 Top View Final", topView);
-          cv::imwrite("okvis2_final_ba.png", topView);
+          cv::imshow("DGVI-SLAM Top View Final", topView);
+          cv::imwrite("dgvi_slam_final_ba.png", topView);
         }
         cv::waitKey(1000);
       }
       estimator.writeFinalTrajectoryCsv();
       if(parameters.gps){
-        estimator.writeGlobalTrajectoryCsv(savePath+"/okvis2-" + mode + "-global-final-ba_trajectory.csv");
+        estimator.writeGlobalTrajectoryCsv(savePath+"/dgvi-slam-" + mode + "-global-final-ba_trajectory.csv");
       }
       if(parameters.estimator.do_final_ba) {
         estimator.saveMap();

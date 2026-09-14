@@ -1,29 +1,39 @@
-.idea/*
-# All directories starting with build in the repository root
-/build*
-.vscode/*
-*.png
+# Build and editor state
+/build*/
+/devel/
+/install/
+/log/
+/.idea/
+/.vscode/
+/documentation/
+__pycache__/
+*.py[cod]
 *.asv
-/documentation
-Dataset/
-Results/
-backup/
 
+# Local datasets, experiment runs, and backups
+/Dataset/
+/datasets/
+/Results/
+/results/
+/result/
+/backup/
+*.bag
+*.db3
+*.mcap
+*.log
+*_trajectory.csv
+*final_map.csv
+*_tum.txt
+
+# Downloaded networks and archives; tracked runtime resources are retained.
 *.pt
 *.pth
 *.ckpt
 *.onnx
-
-build/
-devel/
-install/
-log/
-
-*.bag
-*.db3
 *.zip
 *.tar
 *.tar.gz
 
-.vscode/
-.idea/
+# Generated visualizations; documentation figures are versioned explicitly.
+*.png
+!docs/images/*.png
