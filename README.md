@@ -74,10 +74,6 @@ Choose a profile and verify its calibration and acquisition settings:
 # Camera + IMU + GNSS + one or more DEM tiles
 ./build/dgvi_slam_app config/field/dgvi_slam.yaml \
   /path/to/sequence results/field /path/to/dem.tif
-
-# GNSS-only profile
-./build/dgvi_slam_app config/fusionportable/gnss_only.yaml \
-  /path/to/sequence results/fusionportable
 ```
 
 ## Outputs and evaluation
