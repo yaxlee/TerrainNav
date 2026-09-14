@@ -26,8 +26,7 @@ Profiles use OpenCV FileStorage YAML (`%YAML:1.0`). The camera calibration, IMU 
 - `gps_bounded_recovery_max_step` bounds the translation applied per GNSS update. `gps_bounded_recovery_max_total <= 0` disables the accumulated-distance cap; the per-update bound still applies.
 - `max_h_err`, `max_v_err`, and `gps_max_speed` screen the GNSS input. `min_fix_status` must match the status codes in the converted CSV, not an assumed universal GNSS status convention.
 
-All four profiles explicitly disable legacy reinitialization (`gps_enable_reinit: false`) and legacy position alignment. Seven settings that only tune that disabled path were removed from the profiles and made optional in the parser: `gps_dropout_threshold`, `gps_reinit_position_sigma_scale`, `gps_reinit_position_loss_scale`, `gps_bounded_recovery_apply_in_reinitialising`, `gps_max_correction`, `gps_max_yaw_correction`, and `gps_min_reinit_points`. The library defaults and implementations remain available for users who deliberately re-enable legacy behavior.
-
+All four profiles explicitly disable legacy reinitialization (`gps_enable_reinit: false`) and legacy position alignment.
 ## DEM and vertical conventions
 
 `dem_parameters.use` controls both DEM-aided GNSS heights and the independent DEM factors. With `use: false`, DEM paths are ignored by the offline application. With `use: true`, provide at least one readable georeferenced raster and geodetic GNSS input.
@@ -38,7 +37,6 @@ All four profiles explicitly disable legacy reinitialization (`gps_enable_reinit
 | `d_above_ground` | Constant sensor/antenna height above terrain for the independent height factor, in meters |
 | `r_SA` | Lever arm used by the height factor, in the IMU frame |
 | `use_dem_height_for_gps: true` | Replace GNSS altitude with DEM terrain height in the reader; `dem_fusion_alpha` is not used in this mode |
-| `use_dem_height_for_gps: false` | Blend GNSS and DEM altitude in the backend using `dem_fusion_alpha` |
 | `gps_parameters.geoid_model` | GeographicLib geoid grid, currently `egm96-5`; an empty string disables correction |
 
 The independent height factor remains active when DEM is enabled even if `dem_fusion_alpha` is `1.0`. Thus alpha is not the full-system DEM ablation switch.
