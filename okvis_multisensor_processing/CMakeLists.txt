@@ -99,7 +99,10 @@ if(BUILD_TESTS)
   set(TEST_NAME okvis_multisensor_processing_test)
   add_executable(${TEST_NAME}
     test/test_main.cpp
+    test/TestDemConfiguration.cpp
   )
+  target_compile_definitions(${TEST_NAME} PRIVATE
+    DGVI_TEST_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config")
   target_link_libraries(${TEST_NAME}
     ${LIB_NAME}
     gmock

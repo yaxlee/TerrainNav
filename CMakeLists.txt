@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.8...3.30)
-project(okvis VERSION 2.0.0 LANGUAGES CXX C)
+project(dgvi_slam VERSION 2.0.0 LANGUAGES CXX C)
+
+include(GNUInstallDirs)
 
 # options for build configuration
 option (USE_SYSTEM_BRISK
@@ -9,23 +11,25 @@ option (USE_SYSTEM_DBOW2
 option (USE_SYSTEM_CERES
         "Use ceres via find_package rather than downloading it as part of okvis" OFF)
 option (BUILD_APPS
-        "Builds a demo app (which require boost and OpenCV highgui)" ON)
+        "Build the DGVI-SLAM dataset application" ON)
 option (BUILD_TESTS
         "Builds all gtests" OFF)
 option (BUILD_ROS2
-        "Builds ros2 wrapper" ON)
+        "Builds ros2 wrapper" OFF)
 option (HAVE_LIBREALSENSE
-        "Use realsense as part of okvis" ON)
+        "Use realsense as part of okvis" OFF)
 option (USE_NN
-        "Use keypoint classification as part of okvis, requires torch" ON)
+        "Use keypoint classification as part of okvis, requires torch" OFF)
 option (USE_GPU
-        "Use keypoint classification with GPU inference, requires torch with Cuda" ON)
+        "Use keypoint classification with GPU inference, requires torch with Cuda" OFF)
 option (DO_TIMING
         "Enable timing" ON)
 option (BUILD_SHARED_LIBS
         "Whether to build okvis as a shared library" OFF)
 
 option (USE_COLIDMAP "Whether to build okvis supportin colour and object's id 'for language based OKVIS' or regular one" ON)
+
+option(BUILD_LEGACY_APPS "Build inherited dense mapping and sensor applications" OFF)
 
 set(OKVIS_CXX_STANDARD 17)
 set(OKVIS_PUBLIC_CXX_FLAGS)
@@ -190,25 +194,6 @@ if(BUILD_APPS)
     find_package(DBoW2 REQUIRED)
   endif()
   
-  # DBoW2 test app
-  add_executable(dbow2_test okvis_apps/src/dbow2_test.cpp)
-  target_include_directories(dbow2_test
-    PRIVATE
-      ${DBoW2_INCLUDE_DIRS}
-  )
-  target_link_libraries(dbow2_test PRIVATE
-    ${OpenCV_LIBS}
-    Boost::filesystem
-    okvis::Frontend
-  )
-  target_compile_options(dbow2_test
-    PUBLIC
-      ${OKVIS_PUBLIC_CXX_FLAGS}
-    PRIVATE
-      ${OKVIS_PRIVATE_CXX_FLAGS}
-  )
-
-
   # require GeographicLib
   find_package(GeographicLib REQUIRED)
 
@@ -218,21 +203,23 @@ if(BUILD_APPS)
       message(STATUS "Found GDAL: ${GDAL_VERSION}")
   endif()
 
-  # OKVIS2 app
-  add_executable(okvis_app_synchronous okvis_apps/src/okvis_app_synchronous.cpp)
-  target_link_libraries(okvis_app_synchronous
+  # DGVI-SLAM: visual-inertial estimation with GNSS and DEM
+  add_executable(dgvi_slam_app okvis_apps/src/dgvi_slam_app.cpp)
+  target_link_libraries(dgvi_slam_app
     ${OpenCV_LIBS}
     Boost::filesystem
     okvis::MultisensorProcessing
   )
-  target_compile_options(okvis_app_synchronous
+  target_compile_options(dgvi_slam_app
     PUBLIC
       ${OKVIS_PUBLIC_CXX_FLAGS}
     PRIVATE
       ${OKVIS_PRIVATE_CXX_FLAGS}
   )
-  install(TARGETS okvis_app_synchronous EXPORT okvisTargets RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  install(TARGETS dgvi_slam_app EXPORT okvisTargets RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  install(FILES resources/small_voc.yml.gz DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+  if(BUILD_LEGACY_APPS)
   add_executable(okvis2x_app_synchronous
           okvis_apps/src/okvis2x_app_synchronous.cpp
           )
@@ -297,28 +284,6 @@ if(BUILD_APPS)
   if(USE_NN)
     find_package(Torch REQUIRED)
   
-    # Torch test app
-    add_executable(nn_test okvis_apps/src/nn_test.cpp)
-    target_compile_options(nn_test PRIVATE ${TORCH_CXX_FLAGS})
-    target_include_directories(nn_test
-      PRIVATE
-        ${TORCH_INCLUDE_DIRS}
-    )
-    target_link_libraries(nn_test
-      ${OpenCV_LIBS}
-      ${TORCH_LIBRARIES}
-    )
-    target_compile_features(nn_test PUBLIC cxx_std_${OKVIS_CXX_STANDARD})
-    target_compile_options(nn_test
-      PUBLIC
-        ${OKVIS_PUBLIC_CXX_FLAGS}
-      PRIVATE
-        ${OKVIS_PRIVATE_CXX_FLAGS}
-    )
-    target_compile_features(nn_test
-      PUBLIC cxx_std_${OKVIS_CXX_STANDARD}
-    )
-    
     # Submapping App with Stereo Depth NN
     add_executable(okvis2x_app_snetwork_synchronous
                    okvis_apps/src/okvis2x_app_network_synchronous.cpp)
@@ -365,7 +330,8 @@ if(BUILD_APPS)
       SRL::Projection
     )
 
-  endif()               
+  endif()
+  endif() # BUILD_LEGACY_APPS
 endif()
 
 # ros2
@@ -518,7 +484,7 @@ if(BUILD_ROS2)
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   )
-  install(DIRECTORY include/okvis DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} FILES_MATCHING PATTERN "*.hpp")
+  install(DIRECTORY okvis_ros2/include/okvis DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} FILES_MATCHING PATTERN "*.hpp")
 
   # OKVIS2X nodes - Wo/ Deep Learning
 
@@ -633,7 +599,6 @@ if(BUILD_ROS2)
 endif(BUILD_ROS2)
 
 # The directory where the .cmake files will be installed
-include(GNUInstallDirs)
 if(WIN32 AND NOT CYGWIN)
     set(INSTALL_CMAKEDIR "${PACKAGE_NAME}/cmake")
 elseif(APPLE)

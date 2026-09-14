@@ -425,8 +425,8 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
       else { std::string s = std::string(demNode["use"]); useVal = (s == "true" || s == "1" || s == "yes"); }
       (*viParameters_.dem).use = useVal;
     }
-    if(demNode["sigma_h"].isReal()) demNode["sigma_h"] >> (*viParameters_.dem).sigma_h;
-    if(demNode["d_above_ground"].isReal()) demNode["d_above_ground"] >> (*viParameters_.dem).d_above_ground;
+    if(demNode["sigma_h"].isReal() || demNode["sigma_h"].isInt()) demNode["sigma_h"] >> (*viParameters_.dem).sigma_h;
+    if(demNode["d_above_ground"].isReal() || demNode["d_above_ground"].isInt()) demNode["d_above_ground"] >> (*viParameters_.dem).d_above_ground;
     if(demNode["r_SA"].isSeq()) {
       (*viParameters_.dem).r_SA = Eigen::Vector3d(
           double(demNode["r_SA"][0]), double(demNode["r_SA"][1]), double(demNode["r_SA"][2]));
@@ -437,7 +437,7 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
       else { std::string s = std::string(demNode["use_dem_height_for_gps"]); v = (s == "true" || s == "1" || s == "yes"); }
       (*viParameters_.dem).useDemHeightForGps = v;
     }
-    if(demNode["dem_fusion_alpha"].isReal()) demNode["dem_fusion_alpha"] >> (*viParameters_.dem).demFusionAlpha;
+    if(demNode["dem_fusion_alpha"].isReal() || demNode["dem_fusion_alpha"].isInt()) demNode["dem_fusion_alpha"] >> (*viParameters_.dem).demFusionAlpha;
     LOG(INFO) << "Parsed DEM parameters: use=" << std::boolalpha << (*viParameters_.dem).use
               << ", sigma_h=" << (*viParameters_.dem).sigma_h
               << "m, d_above_ground=" << (*viParameters_.dem).d_above_ground
@@ -723,8 +723,11 @@ bool ViParametersReader::getGpsCalibration(const cv::FileNode& calibrationNode, 
              gpsParameters.gpsLossScale);
   parseEntry(calibrationNode, "gps_outlier_scale",
              gpsParameters.gpsOutlierScale);
-  parseEntry(calibrationNode, "gps_dropout_threshold",
-             gpsParameters.gpsDropoutThreshold);
+  // Optional legacy reinitialization setting; defaults remain available.
+  if (!calibrationNode["gps_dropout_threshold"].empty()) {
+    parseEntry(calibrationNode, "gps_dropout_threshold",
+               gpsParameters.gpsDropoutThreshold);
+  }
   parseEntry(calibrationNode, "gps_enable_reinit",
              gpsParameters.gpsEnableReInit);
   parseEntry(calibrationNode, "gps_velocity_sigma",
@@ -733,10 +736,14 @@ bool ViParametersReader::getGpsCalibration(const cv::FileNode& calibrationNode, 
              gpsParameters.gpsVelocityMinDt);
   parseEntry(calibrationNode, "gps_velocity_max_dt",
              gpsParameters.gpsVelocityMaxDt);
-  parseEntry(calibrationNode, "gps_reinit_position_sigma_scale",
-             gpsParameters.gpsReinitPositionSigmaScale);
-  parseEntry(calibrationNode, "gps_reinit_position_loss_scale",
-             gpsParameters.gpsReinitPositionLossScale);
+  if (!calibrationNode["gps_reinit_position_sigma_scale"].empty()) {
+    parseEntry(calibrationNode, "gps_reinit_position_sigma_scale",
+               gpsParameters.gpsReinitPositionSigmaScale);
+  }
+  if (!calibrationNode["gps_reinit_position_loss_scale"].empty()) {
+    parseEntry(calibrationNode, "gps_reinit_position_loss_scale",
+               gpsParameters.gpsReinitPositionLossScale);
+  }
   parseEntry(calibrationNode, "gps_enable_legacy_position_alignment",
              gpsParameters.gpsEnableLegacyPositionAlignment);
   parseEntry(calibrationNode, "gps_bounded_recovery_enabled",
@@ -755,18 +762,26 @@ bool ViParametersReader::getGpsCalibration(const cv::FileNode& calibrationNode, 
              gpsParameters.gpsBoundedRecoveryHorizontalOnly);
   parseEntry(calibrationNode, "gps_bounded_recovery_apply_in_initialised",
              gpsParameters.gpsBoundedRecoveryApplyInInitialised);
-  parseEntry(calibrationNode, "gps_bounded_recovery_apply_in_reinitialising",
-             gpsParameters.gpsBoundedRecoveryApplyInReInitialising);
+  if (!calibrationNode["gps_bounded_recovery_apply_in_reinitialising"].empty()) {
+    parseEntry(calibrationNode, "gps_bounded_recovery_apply_in_reinitialising",
+               gpsParameters.gpsBoundedRecoveryApplyInReInitialising);
+  }
   parseEntry(calibrationNode, "gps_bounded_recovery_stationary_speed_threshold",
              gpsParameters.gpsBoundedRecoveryStationarySpeedThreshold);
-  parseEntry(calibrationNode, "gps_max_correction",
-             gpsParameters.gpsMaxCorrection);
-  parseEntry(calibrationNode, "gps_max_yaw_correction",
-             gpsParameters.gpsMaxYawCorrection);
+  if (!calibrationNode["gps_max_correction"].empty()) {
+    parseEntry(calibrationNode, "gps_max_correction",
+               gpsParameters.gpsMaxCorrection);
+  }
+  if (!calibrationNode["gps_max_yaw_correction"].empty()) {
+    parseEntry(calibrationNode, "gps_max_yaw_correction",
+               gpsParameters.gpsMaxYawCorrection);
+  }
   parseEntry(calibrationNode, "gps_min_init_points",
              gpsParameters.gpsMinInitPoints);
-  parseEntry(calibrationNode, "gps_min_reinit_points",
-             gpsParameters.gpsMinReInitPoints);
+  if (!calibrationNode["gps_min_reinit_points"].empty()) {
+    parseEntry(calibrationNode, "gps_min_reinit_points",
+               gpsParameters.gpsMinReInitPoints);
+  }
   parseEntry(calibrationNode, "gps_max_init_buffer_points",
              gpsParameters.gpsMaxInitBufferPoints);
   parseEntry(calibrationNode, "gps_max_speed",

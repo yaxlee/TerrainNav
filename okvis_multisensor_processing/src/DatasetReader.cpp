@@ -65,7 +65,7 @@ DatasetReader::DatasetReader(
   const Duration & deltaT, const std::optional<GpsParameters>& gpsParameters,
   const std::optional<DemParameters>& demParameters, const std::vector<std::string>& demPaths) :
   numCameras_(numCameras), syncCameras_(syncCameras), deltaT_(deltaT) {
-  if (demParameters) {
+  if (demParameters && demParameters->use) {
     useDemHeightForGps_ = (*demParameters).useDemHeightForGps;
     demSigmaH_ = (*demParameters).sigma_h;
   }
@@ -90,13 +90,13 @@ DatasetReader::DatasetReader(
       }
     }
 
-    if (!demPaths.empty()) {
+    if (demParameters && demParameters->use && !demPaths.empty()) {
       GDALAllRegister();
       for (const std::string& demPath : demPaths) {
         loadDemDataset(demPath);
       }
       if (demDatasets_.empty()) {
-        LOG(ERROR) << "No DEM datasets could be loaded from " << demPaths.size() << " path(s).";
+        OKVIS_THROW(Exception, "No DEM datasets could be loaded from " << demPaths.size() << " path(s).");
       } else {
         LOG(INFO) << "Loaded " << demDatasets_.size() << " DEM dataset(s); lookup uses input order.";
       }

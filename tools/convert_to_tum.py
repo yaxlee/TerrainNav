@@ -1,65 +1,51 @@
-# This Python file uses the following encoding: utf-8
+#!/usr/bin/env python3
+"""Convert a DGVI-SLAM/OKVIS trajectory CSV to TUM format (standard library only)."""
 
-# if__name__ == "__main__":
-#     pass
-
-####################################################################################
-
-# Import Modules
-
-import os
-import cv2
-import numpy as np
 import argparse
 import csv
-import sys
-
-####################################################################################
-
-# Parse command line arguments
-if len(sys.argv) != 2:
-    print("ERROR! wrong number of arguments")
-    print("Usage: python3 convert_to_tum.py [path_to_euroc_folder]")
-    sys.exit()
-
-file_to_convert = sys.argv[1]
-print("converting data under "+file_to_convert)
-
-out = open(file_to_convert[:-4] + '_tum.txt', 'w')
-out.write('# timestamp_s tx ty tz qx qy qz qw\n')
-# skip first line i.e. read header first and then iterate over each row od csv as a list
-with open(file_to_convert, 'r') as read_obj:
-    csv_reader = csv.reader(read_obj)
-    header = next(csv_reader)
-    # Check file as empty
-    if header != None:
-        # Iterate over each row after the header in the csv
-        for row in csv_reader:
-            timestamp = np.float64(row[0])/1E+09
-            px = np.float64(row[1])
-            py = np.float64(row[2])
-            pz = np.float64(row[3])
-            qx = np.float64(row[4])
-            qy = np.float64(row[5])
-            qz = np.float64(row[6])
-            qw = np.float64(row[7])
-            out.write(str(timestamp))
-            out.write(' ')
-            out.write(str(px))
-            out.write(' ')
-            out.write(str(py))
-            out.write(' ')
-            out.write(str(pz))
-            out.write(' ')
-            out.write(str(qx))
-            out.write(' ')
-            out.write(str(qy))
-            out.write(' ')
-            out.write(str(qz))
-            out.write(' ')
-            out.write(str(qw))
-            out.write('\n')
-
-out.close()
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 
+def convert(source: Path, destination: Path) -> None:
+    if source.resolve() == destination.resolve():
+        raise ValueError("Input and output paths must differ")
+    # Validate before creating the output to avoid leaving partial results.
+    rows = []
+    with source.open(newline="") as stream:
+        reader = csv.reader(stream)
+        next(reader, None)
+        for line_number, row in enumerate(reader, start=2):
+            if not row or not any(value.strip() for value in row):
+                continue
+            if len(row) < 8:
+                raise ValueError(f"Line {line_number}: expected at least 8 columns")
+            try:
+                values = [Decimal(value.strip()) for value in row[:8]]
+            except InvalidOperation as error:
+                raise ValueError(f"Line {line_number}: invalid numeric value") from error
+            if not all(value.is_finite() for value in values):
+                raise ValueError(f"Line {line_number}: non-finite value")
+            timestamp = values[0] / Decimal(1_000_000_000)
+            pose = " ".join(value.strip() for value in row[1:8])
+            rows.append(f"{timestamp:.9f} {pose}\n")
+    with destination.open("x") as stream:
+        stream.write("# timestamp_s tx ty tz qx qy qz qw\n")
+        stream.writelines(rows)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input", type=Path, help="Trajectory CSV with nanosecond timestamps")
+    parser.add_argument("-o", "--output", type=Path, help="Default: INPUT_STEM_tum.txt")
+    args = parser.parse_args()
+    output = args.output or args.input.with_name(args.input.stem + "_tum.txt")
+    try:
+        convert(args.input, output)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f"Error: {error}\n")
+    print(output)
+
+
+if __name__ == "__main__":
+    main()

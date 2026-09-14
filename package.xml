@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>okvis</name>
-  <version>0.0.0</version>
-  <description>OKVIS ROS2</description>
+  <name>dgvi_slam</name>
+  <version>2.0.0</version>
+  <description>DGVI-SLAM: DEM-aided GNSS visual-inertial SLAM, based on OKVIS2-X.</description>
 
   <maintainer email="stefan.leutenegger@tum.de">Stefan Leutenegger</maintainer>
   <author email="stefan.leutenegger@tum.de">Stefan Leutenegger</author>
