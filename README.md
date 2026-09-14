@@ -20,17 +20,11 @@ We evaluate five public and six field sequences. On the field sequences, adding 
 
 ## Build
 
-The primary entry point is the **offline dataset application**, `dgvi_slam_app`. The default build disables ROS 2, RealSense, and neural depth/segmentation networks. Inherited mapping libraries remain dependencies of the backend.
-
-Start from this repository and initialize its pinned submodules:
-
 ```bash
-git clone --recurse-submodules https://github.com/yaxlee/Terrian-SLAM.git DGVI-SLAM
+git clone
 cd DGVI-SLAM
 git submodule update --init --recursive
 ```
-
-The repository URL above is its current location. The project and executable use the DGVI-SLAM name. Access to a private repository requires your normal GitHub authentication; the `supereight2` submodule currently uses an SSH URL.
 
 On Ubuntu 22.04, the native dependencies are:
 
