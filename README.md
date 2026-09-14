@@ -45,8 +45,6 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 cmake --build build --target dgvi_slam_app -j4
 ```
 
-`resources/small_voc.yml.gz` is required for place recognition and is copied beside the executable during the build. Keep the tracked runtime resources and pinned submodules. ROS 2 and the inherited dense-mapping applications are optional integrations; their interfaces do not replace the DEM-enabled offline workflow documented here.
-
 ## Prepare input data
 
 Use the converted dataset layout expected by `DatasetReader`:
@@ -56,7 +54,8 @@ Use the converted dataset layout expected by `DatasetReader`:
 | `cam0/data.csv` | Header, then `timestamp_ns,filename` |
 | `cam0/data/` | Images referenced by the camera CSV |
 | `imu0/data.csv` | Header, then `timestamp_ns,wx,wy,wz,ax,ay,az` |
-| `gps0/data_raw.csv` | Geodetic GNSS records described below |
+| `gps0/data.csv` | Geodetic GNSS records described below |
+| `dem0/.tiff` | DEM |
 
 Add `cam1`, etc. when a calibrated profile contains multiple cameras. Image filenames are relative to the camera's `data/` directory. Angular velocity is in rad/s, acceleration in m/s². Camera, IMU, and GNSS timestamps must use a consistent clock and epoch; the current reader applies no GNSS leap-second offset.
 
