@@ -142,4 +142,3 @@ dem_parameters:
   d_above_ground: 2.13
   r_SA: [0, 0, 0]
   use_dem_height_for_gps: true
-  dem_fusion_alpha: 0.5
