@@ -76,7 +76,7 @@ Choose a profile and verify its calibration and acquisition settings:
   /path/to/sequence results/field /path/to/dem.tif
 ```
 
-## Outputs and evaluation
+## Outputs and 
 
 For SLAM mode, output filenames start with `dgvi-slam-slam`; disabling loop closure changes the mode to `vio`.
 
