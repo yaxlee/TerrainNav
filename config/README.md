@@ -39,12 +39,3 @@ All four profiles explicitly disable legacy reinitialization (`gps_enable_reinit
 | `use_dem_height_for_gps: true` | Replace GNSS altitude with DEM terrain height in the reader; `dem_fusion_alpha` is not used in this mode |
 | `gps_parameters.geoid_model` | GeographicLib geoid grid, currently `egm96-5`; an empty string disables correction |
 
-The independent height factor remains active when DEM is enabled even if `dem_fusion_alpha` is `1.0`. Thus alpha is not the full-system DEM ablation switch.
-
-In the current implementation, DEM replacement/blending uses terrain height directly; `d_above_ground` is applied to the separate DEM height factor. This behavior is preserved. The DEM-to-global height relationship uses the manuscript's vertical-datum approximation. Check the raster datum and GNSS altitude convention before choosing the geoid correction or height offset. The reader logs a warning and disables geoid correction if the requested GeographicLib grid is unavailable; check the log before evaluating results. Missing raster coverage causes individual DEM queries to be skipped.
-
-## Comparing profiles
-
-The two FusionPortable profiles differ in `mask_rects`, `num_keyframes` (7 versus 11), and `num_imu_frames` (7 versus 15), in addition to DEM settings. They preserve existing experiments and should not be treated as a controlled DEM-only comparison. For that comparison, duplicate one profile and change only `dem_parameters.use`.
-
-These profiles do not encode every sequence-specific setting reported in the paper. The run wrapper saves the actual YAML used for each invocation, which should accompany any new evaluation results.
