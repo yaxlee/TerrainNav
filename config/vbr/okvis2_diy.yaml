@@ -1,0 +1,67 @@
+%YAML:1.0
+cameras:
+  - T_SC: [ -0.17482736,  0.18272624,  0.96749497, -0.32484639,
+            -0.98186076,  0.04087958, -0.18514401,  0.14223366,
+            -0.07338146, -0.98231359,  0.17226485, -0.16193993,
+             0.0,         0.0,         0.0,         1.0]
+
+    image_dimension: [1920, 1080]
+    focal_length: [996.0940618613381, 993.8341991996108]
+    principal_point: [959.7121356064699, 537.3494233078804]
+
+    # distortion_coefficients: [0.027833, 0.000463, 0.001986, 0.000052]
+    # distortion_coefficients: [-0.10572495, 0.2426826, -0.00141098, -0.00577569]
+    # distortion_coefficients: [0.04353087, -0.08582635, 0.00052943, 0.00003854]
+    distortion_coefficients: [0.043530866004430305, -0.08582634568482764, 0.0005294326524251752, 3.853619562239394e-05]
+
+    # distortion_coefficients: [-0.11189064, 0.27022719, -0.0011909, -0.00119663]
+    
+    distortion_type: radialtangential
+
+    cam_model: pinhole
+    camera_type: gray
+    mapping: false
+    mapping_rectification: false
+    slam_use: okvis
+
+camera_parameters:
+  timestamp_tolerance: 0.005
+  sync_cameras: [0]
+  image_delay: -0.12328596443215588
+  online_calibration: {do_extrinsics: false, do_extrinsics_final_ba: false, sigma_r: 0.01, sigma_alpha: 0.1, sigma_r_final_ba: 0.02, sigma_alpha_final_ba: 0.2}
+  # deep_stereo_indices: [0, 1]
+  fov_scale: 1.0 # Divisor for new focal length which is only used when fisheye stereo rectification for dense mapping.
+
+imu_parameters:
+  use: true
+  a_max: 176.0
+  g_max: 7.8
+  sigma_g_c: 0.00010517153663548445
+  sigma_a_c: 0.0010132826491084815
+  sigma_bg: 0.01
+  sigma_ba: 0.01
+  sigma_gw_c: 3.752483891947667e-06
+  sigma_aw_c: 2.4247933148638374e-05
+  g: 9.81007
+  g0: [0.0, 0.0, 0.0]
+  a0: [0.07, 0.03, -0.11]
+  s_a: [1.0, 1.0, 1.0]
+  
+
+  T_BS: [1.0000, 0.0000, 0.0000, 0.0000,
+         0.0000, 1.0000, 0.0000, 0.0000,
+         0.0000, 0.0000, 1.0000, 0.0000,
+         0.0000, 0.0000, 0.0000, 1.0000]
+
+
+
+frontend_parameters: {detection_threshold: 50.0, absolute_threshold: 5.0, matching_threshold: 60.0,
+  octaves: 0, max_num_keypoints: 1000, keyframe_overlap: 0.6, use_cnn: false, parallelise_detection: true,
+  num_matching_threads: 4}
+
+estimator_parameters: {num_keyframes: 5, num_loop_closure_frames: 3, num_imu_frames: 3,
+  do_loop_closures: true, do_final_ba: true, enforce_realtime: false, realtime_min_iterations: 3,
+  realtime_max_iterations: 10, realtime_time_limit: 0.035, realtime_num_threads: 3,
+  full_graph_iterations: 15, full_graph_num_threads: 3, p_dbow: 0.55, drift_percentage_heuristic: 5.5}
+
+output_parameters: {display_topview: true, display_matches: true, display_overhead: false, enable_submapping: false}
