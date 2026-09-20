@@ -67,9 +67,6 @@ With `dem_parameters.use: true`, DEM rasters are loaded automatically from `dem0
 | [UrbanLoco](config/urbanloco.yaml) | UrbanLoco monocular visual-inertial data with geodetic GNSS |
 
 ```bash
-./build/dgvi_slam_app config/field.yaml /path/to/sequence results/field
-
-# Enable dem_parameters.use and place rasters in the sequence's mav0/dem0/
 ./build/dgvi_slam_app /path/to/field.yaml /path/to/self-collected-sequence /path/to/result
 ```
 
