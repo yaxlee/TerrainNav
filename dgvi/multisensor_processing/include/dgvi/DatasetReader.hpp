@@ -162,10 +162,13 @@ private:
   std::vector<DemDataset> demDatasets_; ///< Ordered DEM datasets used for fallback lookup.
 
 public:
+  /// @brief Number of successfully loaded DEM rasters.
+  size_t numDemDatasets() const { return demDatasets_.size(); }
+
   /// @brief Query terrain height from DEM at a given geodetic coordinate.
   /// @param lat Latitude [degrees].
   /// @param lon Longitude [degrees].
-  /// @return Height [m], or -1.0 if out of bounds / not loaded.
+  /// @return Height [m], or negative infinity if no raster has a valid sample.
   double getDemHeight(double lat, double lon);
 };
 

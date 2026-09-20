@@ -45,7 +45,9 @@ cmake --build build --target dgvi_slam_app -j4
 
 ## Prepare input data
 
-Use the converted dataset layout expected by `DatasetReader`:
+Use the converted dataset layout expected by `DatasetReader`. Paths below are
+relative to `mav0/` (or the supplied dataset directory when it directly contains
+the sensor folders):
 
 | Path | Contents |
 |---|---|
@@ -53,13 +55,16 @@ Use the converted dataset layout expected by `DatasetReader`:
 | `cam0/data/` | Images Data |
 | `imu0/data.csv` | IMU Data |
 | `gps0/data.csv` | GNSS Data |
-| `dem0/.tif` | DEM Data |
+| `dem0/*.tif`, `dem0/*.tiff`, `dem0/*.vrt` | Georeferenced DEM rasters |
+
+With `dem_parameters.use: true`, DEM rasters are loaded automatically from `dem0/`.
 
 ## Run
 
 The executable is `dgvi_slam_app`. It accepts a dataset in the layout above,
-an optional output directory, and optional DEM raster paths. `-rpg` selects the
-inherited RPG reader (without DEM).
+and an optional output directory. The standard reader accepts either a sequence
+directory containing `mav0/` or `mav0/` itself. Explicit DEM raster paths remain
+available as an override. `-rpg` selects the inherited RPG reader (without DEM).
 
 | Included profile | Purpose |
 |---|---|
@@ -70,9 +75,9 @@ inherited RPG reader (without DEM).
 ```bash
 ./build/dgvi_slam_app config/field.yaml /path/to/sequence results/field
 
-# Camera + IMU + geodetic GNSS + DEM, using your calibrated configuration
+# Enable dem_parameters.use and place rasters in the sequence's mav0/dem0/
 ./build/dgvi_slam_app /path/to/field.yaml \
-  /path/to/self-collected-sequence /path/tp/result
+  /path/to/self-collected-sequence /path/to/result
 ```
 
 See [configuration guidance](config/README.md).

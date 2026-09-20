@@ -18,6 +18,7 @@
  
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <limits>
 #include <sstream>
@@ -36,6 +37,27 @@
 
 namespace dgvi {
 namespace {
+std::vector<std::string> findDemRasters(const std::string& datasetPath) {
+  const boost::filesystem::path directory = boost::filesystem::path(datasetPath) / "dem0";
+  std::vector<std::string> paths;
+  if (!boost::filesystem::is_directory(directory)) {
+    return paths;
+  }
+  for (const auto& entry : boost::filesystem::directory_iterator(directory)) {
+    if (!boost::filesystem::is_regular_file(entry.path())) {
+      continue;
+    }
+    std::string extension = entry.path().extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension == ".tif" || extension == ".tiff" || extension == ".vrt") {
+      paths.push_back(entry.path().string());
+    }
+  }
+  std::sort(paths.begin(), paths.end());
+  return paths;
+}
+
 double horizontalGeodeticDistanceMeters(double lat0, double lon0,
                                         double lat1, double lon1) {
   static constexpr double kEarthRadiusMeters = 6378137.0;
@@ -65,7 +87,10 @@ DatasetReader::DatasetReader(
   const Duration & deltaT, const std::optional<GpsParameters>& gpsParameters,
   const std::optional<DemParameters>& demParameters, const std::vector<std::string>& demPaths) :
   numCameras_(numCameras), syncCameras_(syncCameras), deltaT_(deltaT) {
+  setDatasetPath(path);
   if (demParameters && demParameters->use) {
+    DGVI_ASSERT_TRUE(Exception, gpsParameters && gpsParameters->type == "geodetic",
+                     "DEM requires geodetic GNSS input")
     useDemHeightForGps_ = (*demParameters).useDemHeightForGps;
     demSigmaH_ = (*demParameters).sigma_h;
   }
@@ -90,13 +115,18 @@ DatasetReader::DatasetReader(
       }
     }
 
-    if (demParameters && demParameters->use && !demPaths.empty()) {
+    if (demParameters && demParameters->use) {
+      const std::vector<std::string> paths = demPaths.empty() ? findDemRasters(path_) : demPaths;
+      if (paths.empty()) {
+        DGVI_THROW(Exception, "DEM is enabled, but no .tif/.tiff/.vrt rasters were found in "
+                   << (boost::filesystem::path(path_) / "dem0").string());
+      }
       GDALAllRegister();
-      for (const std::string& demPath : demPaths) {
+      for (const std::string& demPath : paths) {
         loadDemDataset(demPath);
       }
       if (demDatasets_.empty()) {
-        DGVI_THROW(Exception, "No DEM datasets could be loaded from " << demPaths.size() << " path(s).");
+        DGVI_THROW(Exception, "No DEM datasets could be loaded from " << paths.size() << " path(s).");
       } else {
         LOG(INFO) << "Loaded " << demDatasets_.size() << " DEM dataset(s); lookup uses input order.";
       }
@@ -106,7 +136,6 @@ DatasetReader::DatasetReader(
     gpsFlag_ = false;
   }
   streaming_ = false;
-  setDatasetPath(path);
   counter_ = 0;
   t_gps_ = dgvi::Time(0.0);
 }
@@ -181,12 +210,12 @@ bool DatasetReader::loadDemDataset(const std::string& demPath) {
 }
 
 double DatasetReader::getDemHeight(const DemDataset& demDataset, double lat, double lon) const {
-  if (!demDataset.dataset || !demDataset.coordinateTransformation) return -1.0;
+  if (!demDataset.dataset || !demDataset.coordinateTransformation) return -std::numeric_limits<double>::infinity();
 
   double x = lon;
   double y = lat;
   if (!demDataset.coordinateTransformation->Transform(1, &x, &y)) {
-    return -1.0;
+    return -std::numeric_limits<double>::infinity();
   }
 
   const auto& geoTransform = demDataset.geoTransform;
@@ -198,7 +227,7 @@ double DatasetReader::getDemHeight(const DemDataset& demDataset, double lat, dou
 
   if (pixel < 0 || pixel >= demDataset.dataset->GetRasterXSize() ||
       line < 0 || line >= demDataset.dataset->GetRasterYSize()) {
-    return -1.0;
+    return -std::numeric_limits<double>::infinity();
   }
 
   float val;
@@ -208,13 +237,13 @@ double DatasetReader::getDemHeight(const DemDataset& demDataset, double lat, dou
   if (err != CE_None) {
     LOG(WARNING) << "Failed to read DEM value at " << demDataset.path
                  << " pixel " << pixel << ", line " << line;
-    return -1.0;
+    return -std::numeric_limits<double>::infinity();
   }
 
   if (demDataset.hasNoData &&
       (static_cast<double>(val) == demDataset.noDataValue ||
        (std::isnan(static_cast<double>(val)) && std::isnan(demDataset.noDataValue)))) {
-    return -1.0;
+    return -std::numeric_limits<double>::infinity();
   }
 
   return static_cast<double>(val);
@@ -224,16 +253,20 @@ double DatasetReader::getDemHeight(const DemDataset& demDataset, double lat, dou
 double DatasetReader::getDemHeight(double lat, double lon) {
   for (const DemDataset& demDataset : demDatasets_) {
     const double height = getDemHeight(demDataset, lat, lon);
-    if (height >= -100.0) {
+    if (std::isfinite(height) && height >= -100.0) {
       return height;
     }
   }
 
-  return -1.0;
+  return -std::numeric_limits<double>::infinity();
 }
 
 bool DatasetReader::setDatasetPath(const std::string & path) {
-  path_ = path;
+  boost::filesystem::path datasetPath(path);
+  if (boost::filesystem::is_directory(datasetPath / "mav0")) {
+    datasetPath /= "mav0";
+  }
+  path_ = datasetPath.string();
   return true;
 }
 

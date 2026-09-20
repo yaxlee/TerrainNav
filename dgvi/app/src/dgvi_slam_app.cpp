@@ -19,6 +19,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <exception>
 #include <stdlib.h>
 #include <memory>
 #include <functional>
@@ -60,6 +61,8 @@ int main(int argc, char **argv)
   if (argc < 3) {
     LOG(ERROR) <<
     "Usage: " << argv[0] << " configuration-yaml-file dataset-folder [save-path] [dem-path ...] [-rpg]";
+    LOG(ERROR) << "When DEM is enabled, rasters are loaded automatically from dataset-folder[/mav0]/dem0. "
+                  "Explicit DEM paths override this directory.";
     return EXIT_FAILURE;
   }
 
@@ -109,8 +112,8 @@ int main(int argc, char **argv)
   viParametersReader.getParameters(parameters);
 
   const bool useDem = parameters.dem && parameters.dem->use;
-  if (useDem && (!parameters.gps || parameters.gps->type != "geodetic" || rpg || demPaths.empty())) {
-    LOG(ERROR) << "DEM requires the geodetic DatasetReader and at least one .tif/.tiff/.vrt raster.";
+  if (useDem && (!parameters.gps || parameters.gps->type != "geodetic" || rpg)) {
+    LOG(ERROR) << "DEM requires geodetic GNSS input and the standard DatasetReader (without -rpg).";
     return EXIT_FAILURE;
   }
   if (!useDem) {
@@ -121,13 +124,18 @@ int main(int argc, char **argv)
   // the folder path
   std::string path(argv[2]);
   std::shared_ptr<dgvi::DatasetReaderBase> datasetReader;
-  if(rpg){
-    datasetReader.reset(new dgvi::RpgDatasetReader(
-                          path, deltaT, int(parameters.nCameraSystem.numCameras())));
-  } else {
-    datasetReader.reset(new dgvi::DatasetReader(
-                          path, int(parameters.nCameraSystem.numCameras()),
-                          parameters.camera.sync_cameras, deltaT, parameters.gps, parameters.dem, demPaths));
+  try {
+    if(rpg){
+      datasetReader.reset(new dgvi::RpgDatasetReader(
+                            path, deltaT, int(parameters.nCameraSystem.numCameras())));
+    } else {
+      datasetReader.reset(new dgvi::DatasetReader(
+                            path, int(parameters.nCameraSystem.numCameras()),
+                            parameters.camera.sync_cameras, deltaT, parameters.gps, parameters.dem, demPaths));
+    }
+  } catch (const std::exception& error) {
+    LOG(ERROR) << "Failed to initialize dataset reader: " << error.what();
+    return EXIT_FAILURE;
   }
 
   // also check DBoW2 vocabulary
@@ -183,7 +191,7 @@ int main(int argc, char **argv)
     }
 
     // Register DEM callback for high-frequency height constraints (after T_GW is fixed)
-    if(useDem && !demPaths.empty()) {
+    if(useDem) {
       auto* datasetReaderPtr = dynamic_cast<dgvi::DatasetReader*>(datasetReader.get());
       if(datasetReaderPtr) {
         const double sigma_h = (*parameters.dem).sigma_h;
@@ -198,7 +206,7 @@ int main(int argc, char **argv)
             sigma_h, d_above_ground, r_SA, use_dem_height_for_gps, dem_fusion_alpha);
         LOG(INFO) << "DEM callback registered (sigma_h=" << sigma_h
                   << "m, d_above_ground=" << d_above_ground
-                  << "m, dem_count=" << demPaths.size() << ").";
+                  << "m, dem_count=" << datasetReaderPtr->numDemDatasets() << ").";
       }
     }
   }

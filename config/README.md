@@ -30,7 +30,16 @@ All three profiles enable bounded recovery and disable legacy reinitialization a
 
 ## DEM and vertical conventions
 
-`dem_parameters.use` controls both DEM-aided GNSS heights and the independent DEM factors. With `use: false`, DEM paths are ignored by the offline application. With `use: true`, provide at least one readable georeferenced raster and geodetic GNSS input.
+`dem_parameters.use` controls both DEM-aided GNSS heights and the independent DEM factors. With `use: false` or no `dem_parameters` group, the reader ignores DEM data. With `use: true`, it automatically loads georeferenced `.tif`, `.tiff`, and `.vrt` files directly inside `mav0/dem0/`; extension matching is case-insensitive and rasters are tried in filename order. Geodetic GNSS input is required.
+
+The standard reader accepts either the sequence directory containing `mav0/` or `mav0/` itself. For datasets whose sensor folders are directly in the supplied directory, it looks for `dem0/` there. No additional DEM path argument is needed:
+
+```yaml
+dem_parameters:
+  use: true
+```
+
+Set the height uncertainty, sensor height, and lever arm below according to your sensor setup. If DEM is enabled but the directory is missing, contains no supported raster files, or none can be loaded, startup fails with an error. Explicit raster paths on the command line override automatic discovery and retain their supplied order.
 
 | Parameter | Meaning |
 |---|---|
@@ -39,4 +48,3 @@ All three profiles enable bounded recovery and disable legacy reinitialization a
 | `r_SA` | Lever arm used by the height factor, in the IMU frame |
 | `use_dem_height_for_gps: true` | Replace GNSS altitude with DEM terrain height in the reader; `dem_fusion_alpha` is not used in this mode |
 | `gps_parameters.geoid_model` | GeographicLib geoid grid, currently `egm96-5`; an empty string disables correction |
-
