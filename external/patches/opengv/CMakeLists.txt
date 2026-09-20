@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.8...3.16)
 project(opengv VERSION 1.0 LANGUAGES CXX)
 
-# okvis2: remove hardcoded options to inherit them from okvis2
+# dgvi: remove hardcoded options to inherit them from dgvi
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/modules/")
 find_package(Eigen REQUIRED)
@@ -127,22 +127,22 @@ set( OPENGV_HEADER_FILES
   include/opengv/point_cloud/MAPointCloud.hpp )
 
 add_library( opengv ${OPENGV_SOURCE_FILES} ${OPENGV_HEADER_FILES} )
-# okvis2: remove library needed only for tests
+# dgvi: remove library needed only for tests
 set_target_properties( opengv PROPERTIES
                     SOVERSION ${PROJECT_VERSION}
                     VERSION ${PROJECT_VERSION}
                     CXX_STANDARD 11
                     CXX_STANDARD_REQUIRED ON)
-                    # okvis2: remove DEBUG_POSTFIX to easily build in Debug
+                    # dgvi: remove DEBUG_POSTFIX to easily build in Debug
 
 target_include_directories( opengv PUBLIC 
                 # only when building from the source tree
-                $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> # okvis2: make include directory more robust
+                $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> # dgvi: make include directory more robust
                 # only when using the lib from the install path
                 $<INSTALL_INTERFACE:include>
                 ${ADDITIONAL_INCLUDE_DIRS} )
 
-# okvis2: remove tests
+# dgvi: remove tests
 # Configuration
 set(config_install_dir "lib/cmake/${PROJECT_NAME}-${PROJECT_VERSION}")
 set(include_install_dir "include")

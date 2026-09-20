@@ -1,6 +1,6 @@
 # DGVI-SLAM configuration
 
-Profiles use OpenCV FileStorage YAML (`%YAML:1.0`). The camera calibration, IMU noise, image timing, feature masks, optimization settings, and active GNSS/DEM values were preserved from the existing profiles. Verify them against the actual sequence and sensor setup before running.
+Profiles use OpenCV FileStorage YAML (`%YAML:1.0`). The three included profiles are `field.yaml` (self-collected), `fp.yaml` (FusionPortableV2), and `urbanloco.yaml` (UrbanLoco). Each uses a monocular camera, IMU, and geodetic GNSS, with stationarity detection enabled. The files share two-space indentation and parameter-group ordering, with 4-by-4 transforms displayed across four rows. Calibration values and estimator settings retain their supplied values; `slam_use: dgvi` matches the current parser. No profile enables DEM.
 
 ## Parameter groups
 
@@ -26,7 +26,8 @@ Profiles use OpenCV FileStorage YAML (`%YAML:1.0`). The camera calibration, IMU 
 - `gps_bounded_recovery_max_step` bounds the translation applied per GNSS update. `gps_bounded_recovery_max_total <= 0` disables the accumulated-distance cap; the per-update bound still applies.
 - `max_h_err`, `max_v_err`, and `gps_max_speed` screen the GNSS input. `min_fix_status` must match the status codes in the converted CSV, not an assumed universal GNSS status convention.
 
-All four profiles explicitly disable legacy reinitialization (`gps_enable_reinit: false`) and legacy position alignment.
+All three profiles enable bounded recovery and disable legacy reinitialization and legacy position alignment.
+
 ## DEM and vertical conventions
 
 `dem_parameters.use` controls both DEM-aided GNSS heights and the independent DEM factors. With `use: false`, DEM paths are ignored by the offline application. With `use: true`, provide at least one readable georeferenced raster and geodetic GNSS input.

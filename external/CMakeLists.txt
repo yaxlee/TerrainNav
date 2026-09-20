@@ -17,7 +17,7 @@ endif()
 
 if(NOT USE_SYSTEM_DBOW2)
   # Use a modified CMakeLists.txt for DBoW2 to allow building as a static
-  # library and to fix issues when installing it along with okvis.
+  # library and to fix issues when installing it along with dgvi.
   copy_if_exists(${CMAKE_CURRENT_SOURCE_DIR}/patches/DBoW2/CMakeLists.txt ${CMAKE_CURRENT_SOURCE_DIR}/DBoW2/CMakeLists.txt)
   option(BUILD_Demo OFF)
   add_subdirectory(DBoW2)
@@ -37,7 +37,7 @@ if(NOT USE_SYSTEM_CERES)
 endif()
 
 # Use a modified CMakeLists.txt for OpenGV to build with the same flags as
-# okvis2.
+# dgvi.
 copy_if_exists(${CMAKE_CURRENT_SOURCE_DIR}/patches/opengv/CMakeLists.txt ${CMAKE_CURRENT_SOURCE_DIR}/opengv/CMakeLists.txt)
 add_subdirectory(opengv)
 set(OPENGV_LIBRARIES opengv PARENT_SCOPE)

@@ -1,0 +1,132 @@
+%YAML:1.0
+cameras:
+  - T_SC:
+      [-0.9999051815503269, 0.004732473143288427, 0.01293180601292395, -0.0180205340024114,
+       -0.01299004385213019, -0.01248944657363482, -0.9998376230593665, -0.4146529955996187,
+       -0.004570193598478624, -0.9999108047332185, 0.01254973737733384, -0.1799181769958829,
+       0.0, 0.0, 0.0, 1.0]
+    image_dimension: [2048, 1536]
+    focal_length: [1857.4752797615988, 1869.2155909761746]
+    principal_point: [1039.692658811044, 739.3362262994145]
+    distortion_coefficients: [-0.3045165206163752, 0.03889449274915732, 0.0010517466490567872, -0.0005509544941133897, 0.17054732639063463]
+    distortion_type: radialtangential
+    cam_model: pinhole
+    camera_type: gray
+    mapping: true
+    mapping_rectification: false
+    slam_use: dgvi
+
+camera_parameters:
+  timestamp_tolerance: 0.005
+  sync_cameras: [0]
+  image_delay: 0.0
+  online_calibration:
+    do_extrinsics: true
+    do_extrinsics_final_ba: true
+    sigma_r: 0.10
+    sigma_alpha: 0.30
+    sigma_r_final_ba: 0.10
+    sigma_alpha_final_ba: 0.30
+  fov_scale: 1.0
+
+imu_parameters:
+  use: true
+  a_max: 150.0
+  g_max: 35.0
+  sigma_g_c: 0.02
+  sigma_a_c: 0.20
+  sigma_bg: 0.10
+  sigma_ba: 1.0
+  sigma_gw_c: 0.001
+  sigma_aw_c: 0.01
+  g: 9.81007
+  g0: [0.0, 0.0, 0.0]
+  a0: [0.0, 0.0, 0.0]
+  s_a: [1.0, 1.0, 1.0]
+  T_BS:
+    [1.0000, 0.0000, 0.0000, 0.0000,
+     0.0000, 1.0000, 0.0000, 0.0000,
+     0.0000, 0.0000, 1.0000, 0.0000,
+     0.0000, 0.0000, 0.0000, 1.0000]
+
+frontend_parameters:
+  detection_threshold: 35.0
+  absolute_threshold: 20.0
+  matching_threshold: 50.0
+  octaves: 1
+  max_num_keypoints: 1500
+  keyframe_overlap: 0.45
+  use_cnn: false
+  parallelise_detection: true
+  num_matching_threads: 4
+
+stationary_parameters:
+  enabled: true
+  entry_frames: 10
+  exit_frames: 10
+  min_landmarks: 10
+  max_median_pixel_displacement: 0.45
+  max_mean_pixel_displacement: 0.90
+  sigma_v: 0.01
+  sigma_position: 0.01
+  sigma_orientation: 0.01
+  gps_recovery_pause_after_exit_frames: 150
+
+estimator_parameters:
+  num_keyframes: 11
+  num_loop_closure_frames: 5
+  num_imu_frames: 11
+  do_loop_closures: true
+  do_final_ba: true
+  enforce_realtime: false
+  realtime_min_iterations: 2
+  realtime_max_iterations: 20
+  realtime_time_limit: 0.025
+  realtime_num_threads: 1
+  full_graph_iterations: 5
+  full_graph_num_threads: 1
+  p_dbow: 0.4
+  drift_percentage_heuristic: 20.0
+
+output_parameters:
+  display_topview: false
+  display_matches: false
+  display_overhead: false
+  enable_submapping: false
+
+gps_parameters:
+  data_type: geodetic
+  r_SA: [1.06045, 0.5245, 0.722376]
+  yaw_error_threshold: 2.0
+  robust_gps_init: true
+  gps_sigma_scale: 0.2
+  gps_loss_scale: 0.0
+  gps_outlier_scale: 1.0
+  gps_dropout_threshold: 12.0
+  gps_enable_reinit: false
+  gps_velocity_sigma: 0.1
+  gps_velocity_min_dt: 0.2
+  gps_velocity_max_dt: 5.0
+  gps_reinit_position_sigma_scale: 1.0
+  gps_reinit_position_loss_scale: 0.0
+  gps_enable_legacy_position_alignment: false
+  gps_bounded_recovery_enabled: true
+  gps_bounded_recovery_residual_threshold: 5.0
+  gps_bounded_recovery_exit_threshold: 1.0
+  gps_bounded_recovery_consecutive: 2
+  gps_bounded_recovery_max_step: 5.0
+  gps_bounded_recovery_max_total: 0.0
+  gps_bounded_recovery_horizontal_only: true
+  gps_bounded_recovery_apply_in_initialised: true
+  gps_bounded_recovery_apply_in_reinitialising: true
+  gps_bounded_recovery_stationary_speed_threshold: 0.6
+  gps_max_correction: 10.0
+  gps_max_yaw_correction: 1.5
+  gps_min_init_points: 100
+  gps_min_reinit_points: 30
+  gps_max_init_buffer_points: 100
+  gps_max_speed: 50.0
+  max_h_err: 15.0
+  max_v_err: 60.0
+  min_fix_status: 1
+  geoid_model: "egm96-5"

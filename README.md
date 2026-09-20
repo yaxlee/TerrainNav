@@ -2,7 +2,7 @@
 
 **DEM-Aided Visual–Inertial SLAM with Bounded Position-Fix GNSS Recovery in Variable-Elevation Urban Environments**
 
-DGVI-SLAM combines camera and IMU measurements, position-fix GNSS, and a georeferenced digital elevation model (DEM). It builds on [OKVIS2-X](https://github.com/ethz-mrl/OKVIS2-X), retaining its visual–inertial backend and asynchronous GNSS factors while adding persistent global initialization, bounded trajectory recovery, and terrain-height constraints.
+DGVI-SLAM combines camera and IMU measurements, position-fix GNSS, and a georeferenced digital elevation model (DEM). It extends the upstream visual–inertial backend and asynchronous GNSS factors with persistent global initialization, bounded trajectory recovery, and terrain-height constraints.
 
 ![DGVI-SLAM pipeline](docs/images/pipeline.png)
 
@@ -21,8 +21,7 @@ We evaluate five public and six field sequences. On the field sequences, adding 
 ## Build
 
 ```bash
-git clone /path/to/%repository%
-cd $repository$
+cd /path/to/TerrainNav
 git submodule update --init --recursive
 ```
 
@@ -40,8 +39,7 @@ Use a CMake version compatible with the pinned Ceres submodule. The project uses
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_ROS2=OFF -DHAVE_LIBREALSENSE=OFF \
-  -DUSE_NN=OFF -DUSE_GPU=OFF -DBUILD_LEGACY_APPS=OFF
+  -DUSE_NN=OFF -DUSE_GPU=OFF
 cmake --build build --target dgvi_slam_app -j4
 ```
 
@@ -61,19 +59,49 @@ DEM rasters are supplied separately as GeoTIFF (`.tif`/`.tiff`). See [configurat
 
 ## Run
 
-Choose a profile and verify its calibration and acquisition settings:
+The executable is `dgvi_slam_app`. It accepts a dataset in the layout above,
+an optional output directory, and optional DEM raster paths. `-rpg` selects the
+inherited RPG reader (without DEM).
 
-| Profile | Purpose |
+| Included profile | Purpose |
 |---|---|
-| [Self-collected](config/field/dgvi_slam.yaml) | Self-collected Dataset profile|
-| [FusionPortableV2](config/fusionportable/dgvi_slam.yaml) | FusionPortableV2 profile |
-| [UrbanLoco](config/urbanloco/dgvi_slam.yaml) | UrbanLoco profile |
-
+| [Field](config/field.yaml) | Self-collected monocular visual-inertial data with geodetic GNSS |
+| [FusionPortableV2](config/fp.yaml) | FusionPortableV2 monocular visual-inertial data with geodetic GNSS |
+| [UrbanLoco](config/urbanloco.yaml) | UrbanLoco monocular visual-inertial data with geodetic GNSS |
 
 ```bash
-# Camera + IMU + GNSS + DEM
-./build/dgvi_slam_app config/field/dgvi_slam.yaml \
+./build/dgvi_slam_app config/field.yaml /path/to/sequence results/field
+
+# Camera + IMU + geodetic GNSS + DEM, using your calibrated configuration
+./build/dgvi_slam_app /path/to/dgvi_slam.yaml \
   /path/to/sequence results/field /path/to/dem.tif
+```
+
+All three included profiles use geodetic GNSS and include stationarity settings.
+Their calibration and estimator parameters are specific to each sensor setup.
+DEM is not enabled in these profiles. See [configuration guidance](config/README.md).
+
+The repository builds the standalone dataset application in `dgvi/app/` and its
+supporting libraries in `dgvi/`. The shared estimator depends on `dgvi/mapping` and
+`supereight2`. `USE_NN=ON` optionally enables frontend keypoint classification
+using `resources/fast-scnn.pt` and requires LibTorch. Regression tests can be
+enabled with `-DBUILD_TESTS=ON`.
+
+## Source layout
+
+```text
+dgvi/
+  app/src/                  Dataset application entry point
+  ceres/                    Optimization backend and residuals
+  common/                   Parameters and shared interfaces
+  cv/                       Camera models and frames
+  frontend/                 Feature matching and loop closure
+  kinematics/               Transformations
+  mapping/                  Mapping support
+  multisensor_processing/   Dataset readers and SLAM orchestration
+  time/                     Time and duration types
+  timing/                   Performance timers
+  util/                     Shared utilities
 ```
 
 ## Outputs

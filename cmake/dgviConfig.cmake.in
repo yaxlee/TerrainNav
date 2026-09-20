@@ -1,0 +1,35 @@
+# CMake config file for the DGVI package.
+# It defines the following variables:
+#   DGVI_LIBRARIES - libraries to link against
+set(DGVI_VERSION @CMAKE_PROJECT_VERSION@)
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Boost)
+find_dependency(Ceres)
+find_dependency(DBoW2)
+find_dependency(Eigen3)
+find_dependency(Glog)
+find_dependency(OpenCV)
+find_dependency(brisk)
+if(@USE_NN@)
+  find_dependency(Torch)
+endif()
+
+get_filename_component(DIRNAME "${CMAKE_CURRENT_LIST_FILE}" PATH)
+include("${DIRNAME}/dgviTargets.cmake")
+
+set(DGVI_LIBRARIES
+  ${DGVI_LIBRARIES}
+  dgvi::Ceres
+  dgvi::Common
+  dgvi::CV
+  dgvi::Frontend
+  dgvi::Kinematics
+  dgvi::Multisensor_processing
+  dgvi::Time
+  dgvi::Timing
+  dgvi::Util
+)
+
+check_required_components(dgvi)
