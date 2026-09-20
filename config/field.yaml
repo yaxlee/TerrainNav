@@ -131,3 +131,9 @@ gps_parameters:
   max_v_err: 60.0
   min_fix_status: 1
   geoid_model: "egm96-5"
+
+dem_parameters:
+  use: true
+  sigma_h: 10.0
+  d_above_ground: 2.13
+  r_SA: [0, 0, 0]

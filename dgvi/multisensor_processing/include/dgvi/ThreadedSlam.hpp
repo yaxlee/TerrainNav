@@ -165,7 +165,7 @@ class ThreadedSlam : public ViInterface {
                       double d_above_ground = 0.0,
                       const Eigen::Vector3d& r_SA = Eigen::Vector3d::Zero(),
                       bool use_dem_height_for_gps = false,
-                      double dem_fusion_alpha = 0.0) {
+                      double dem_fusion_alpha = 1.0) {
     estimator_.setDemCallback(callback, sigma_h, d_above_ground, r_SA,
                               use_dem_height_for_gps, dem_fusion_alpha);
   }

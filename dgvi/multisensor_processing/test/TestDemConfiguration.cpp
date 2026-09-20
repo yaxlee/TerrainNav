@@ -32,7 +32,7 @@ TEST(DemConfiguration, IntegerHeightAndBlendValuesAreRead) {
           "    use: true\n"
           "    sigma_h: 3\n"
           "    d_above_ground: 2\n"
-          "    dem_fusion_alpha: 1\n";
+          "    dem_fusion_alpha: 0\n";
   struct TemporaryConfig {
     std::filesystem::path path = std::filesystem::temp_directory_path() /
         ("dgvi-config-" + std::to_string(std::chrono::high_resolution_clock::now()
@@ -46,7 +46,7 @@ TEST(DemConfiguration, IntegerHeightAndBlendValuesAreRead) {
   ASSERT_TRUE(parameters.dem.has_value());
   EXPECT_DOUBLE_EQ(parameters.dem->sigma_h, 3.0);
   EXPECT_DOUBLE_EQ(parameters.dem->d_above_ground, 2.0);
-  EXPECT_DOUBLE_EQ(parameters.dem->demFusionAlpha, 1.0);
+  EXPECT_DOUBLE_EQ(parameters.dem->demFusionAlpha, 0.0);
 }
 
 TEST(DemConfiguration, DisabledDemDoesNotOpenSuppliedRasters) {

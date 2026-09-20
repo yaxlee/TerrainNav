@@ -1,6 +1,6 @@
 # DGVI-SLAM configuration
 
-Profiles use OpenCV FileStorage YAML (`%YAML:1.0`). The three included profiles are `field.yaml` (self-collected), `fp.yaml` (FusionPortableV2), and `urbanloco.yaml` (UrbanLoco). Each uses a monocular camera, IMU, and geodetic GNSS, with stationarity detection enabled. The files share two-space indentation and parameter-group ordering, with 4-by-4 transforms displayed across four rows. Calibration values and estimator settings retain their supplied values; `slam_use: dgvi` matches the current parser. No profile enables DEM.
+Profiles use OpenCV FileStorage YAML (`%YAML:1.0`). The three included profiles are `field.yaml` (self-collected), `fp.yaml` (FusionPortableV2), and `urbanloco.yaml` (UrbanLoco). Each uses a monocular camera, IMU, and geodetic GNSS, with stationarity detection enabled. The files share two-space indentation and parameter-group ordering, with 4-by-4 transforms displayed across four rows. Calibration values and estimator settings retain their supplied values; `slam_use: dgvi` matches the current parser. `field.yaml` enables independent DEM height constraints; the other two profiles do not enable DEM.
 
 ## Parameter groups
 
@@ -30,7 +30,7 @@ All three profiles enable bounded recovery and disable legacy reinitialization a
 
 ## DEM and vertical conventions
 
-`dem_parameters.use` controls both DEM-aided GNSS heights and the independent DEM factors. With `use: false` or no `dem_parameters` group, the reader ignores DEM data. With `use: true`, it automatically loads georeferenced `.tif`, `.tiff`, and `.vrt` files directly inside `mav0/dem0/`; extension matching is case-insensitive and rasters are tried in filename order. Geodetic GNSS input is required.
+`dem_parameters.use` enables independent DEM height constraints. GPS altitude and covariance are unchanged by DEM unless altitude replacement or fusion is explicitly configured. With `use: false` or no `dem_parameters` group, the reader ignores DEM data. With `use: true`, it automatically loads georeferenced `.tif`, `.tiff`, and `.vrt` files directly inside `mav0/dem0/`; extension matching is case-insensitive and rasters are tried in filename order. Geodetic GNSS input is required.
 
 The standard reader accepts either the sequence directory containing `mav0/` or `mav0/` itself. For datasets whose sensor folders are directly in the supplied directory, it looks for `dem0/` there. No additional DEM path argument is needed:
 
@@ -46,5 +46,8 @@ Set the height uncertainty, sensor height, and lever arm below according to your
 | `sigma_h` | DEM height standard deviation in meters; use a positive value |
 | `d_above_ground` | Constant sensor/antenna height above terrain for the independent height factor, in meters |
 | `r_SA` | Lever arm used by the height factor, in the IMU frame |
-| `use_dem_height_for_gps: true` | Replace GNSS altitude with DEM terrain height in the reader; `dem_fusion_alpha` is not used in this mode |
+| `use_dem_height_for_gps` | Optional, default `false`; `true` replaces GNSS altitude with DEM terrain height in the reader |
+| `dem_fusion_alpha` | Optional, default `1.0` (no altitude fusion); an explicit value below 1 enables blending when `use_dem_height_for_gps` is `false` |
 | `gps_parameters.geoid_model` | GeographicLib geoid grid, currently `egm96-5`; an empty string disables correction |
+
+The current `field.yaml` omits both optional fusion settings. It uses `sigma_h: 10.0`, `d_above_ground: 2.13`, and `r_SA: [0, 0, 0]` for the independent DEM constraint. Configured geoid correction remains separate from DEM/GPS fusion.

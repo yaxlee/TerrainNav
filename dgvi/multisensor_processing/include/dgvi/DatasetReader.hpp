@@ -144,7 +144,7 @@ private:
   std::unique_ptr<GeographicLib::Geoid> geoid_; ///< Geoid model for ellipsoidal->orthometric correction
 
   // DEM-GPS integration
-  bool useDemHeightForGps_ = false; ///< If true: replace GPS alt with DEM alt in reader; if false: blend in backend
+  bool useDemHeightForGps_ = false; ///< Explicit DEM replacement of GPS altitude; disabled by default.
   double demSigmaH_ = 2.0;          ///< Vertical uncertainty [m] used when DEM replaces GPS altitude
 
   struct DemDataset {

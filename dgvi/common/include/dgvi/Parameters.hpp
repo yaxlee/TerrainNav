@@ -233,8 +233,8 @@ struct DemParameters {
   double sigma_h = 2.0;             ///< Height constraint uncertainty (1-sigma) [m].
   double d_above_ground = 0.0;      ///< Sensor height above ground [m] (constant, e.g. for ground vehicles).
   Eigen::Vector3d r_SA = Eigen::Vector3d::Zero(); ///< Sensor-to-body offset in IMU frame.
-  bool useDemHeightForGps = false;  ///< Fuse GPS altitude with DEM height (requires geodetic data_type).
-  double demFusionAlpha = 0.0;      ///< GPS weight in altitude fusion: 0=full DEM, 1=full GPS, 0.5=equal blend.
+  bool useDemHeightForGps = false;  ///< Explicitly replace GPS altitude with DEM height.
+  double demFusionAlpha = 1.0;      ///< GPS weight: 1 disables altitude fusion; values below 1 opt in.
 };
 
 /// @brief  Struct to specify the parameters of a LiDAR sensor

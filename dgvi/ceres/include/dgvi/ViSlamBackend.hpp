@@ -620,7 +620,7 @@ class ViSlamBackend //: public VioBackendInterface
   /// \brief Register a DEM height query callback and parameters.
   /// After T_GW is fixed, the callback will be called for every new keyframe
   /// to add a 1-DOF height constraint derived from the terrain model.
-  /// \param callback   Function double(lat, lon) returning DEM height [m], or -1 if invalid.
+  /// \param callback   Function double(lat, lon) returning DEM height [m], or a value below -100 if invalid.
   /// \param sigma_h    Height uncertainty (1-sigma) [m].
   /// \param d_above_ground  Sensor height above ground [m].
   /// \param r_SA       Sensor offset in IMU frame (same as GPS antenna offset).
@@ -629,7 +629,7 @@ class ViSlamBackend //: public VioBackendInterface
                       double d_above_ground = 0.0,
                       const Eigen::Vector3d& r_SA = Eigen::Vector3d::Zero(),
                       bool use_dem_height_for_gps = false,
-                      double dem_fusion_alpha = 0.0) {
+                      double dem_fusion_alpha = 1.0) {
     demCallback_ = callback;
     demSigmaH_ = sigma_h;
     demDAboveGround_ = d_above_ground;
@@ -825,8 +825,8 @@ private:
   double demSigmaH_ = 2.0;                            ///< DEM height uncertainty [m].
   double demDAboveGround_ = 0.0;                      ///< Sensor height above ground [m].
   Eigen::Vector3d demR_SA_ = Eigen::Vector3d::Zero(); ///< Sensor offset in IMU frame.
-  bool demUseDemHeightForGps_ = false;                ///< Fuse GPS altitude with DEM height.
-  double demFusionAlpha_ = 0.0;                       ///< GPS weight in altitude fusion (0=DEM, 1=GPS).
+  bool demUseDemHeightForGps_ = false;                ///< Reader explicitly replaces GPS altitude with DEM height.
+  double demFusionAlpha_ = 1.0;                       ///< GPS weight; 1 disables altitude fusion.
   StateId lastDemStateId_;                            ///< Last state for which DEM was added.
 
   // Backlog for Submap Alignment Constraints

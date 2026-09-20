@@ -107,13 +107,13 @@ bool ViSlamBackend::addGpsMeasurementsOnAllGraphs(GpsMeasurementDeque& inputgpsM
   if(realtimeGraph_.gpsParametersVec_.empty()) {
     return false;
   }
-  // When use_dem_height_for_gps=false: blend GPS and DEM altitude in the backend before
-  // adding to the optimizer. This keeps raw GPS altitude at the reader level and lets
-  // the backend do a weighted fusion (alpha=0: full DEM, alpha=1: full GPS).
+  // Altitude fusion is opt-in: alpha=1 keeps the GPS height and covariance unchanged.
+  // A configured alpha below 1 blends GPS and DEM altitude before optimization.
   // When use_dem_height_for_gps=true: the reader already replaced GPS alt with DEM alt
   // (and set vErr=sigma_h), so no further modification is needed here.
   if (demCallback_ &&
       !demUseDemHeightForGps_ &&
+      demFusionAlpha_ < 1.0 &&
       (realtimeGraph_.gpsParametersVec_.back().type == "geodetic" ||
        realtimeGraph_.gpsParametersVec_.back().type == "geodetic-leica")) {
     const double alpha = demFusionAlpha_;
