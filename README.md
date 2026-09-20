@@ -38,8 +38,7 @@ sudo apt install build-essential cmake git libgoogle-glog-dev libgflags-dev \
 Use a CMake version compatible with the pinned Ceres submodule. The project uses C++17. The upstream build instructions use `libgeographiclib-dev` instead of `libgeographic-dev` on Ubuntu 24.04.
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-  -DUSE_NN=OFF -DUSE_GPU=OFF
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target dgvi_slam_app -j4
 ```
 
