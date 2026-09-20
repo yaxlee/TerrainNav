@@ -50,13 +50,12 @@ the sensor folders):
 
 | Path | Contents |
 |---|---|
-| `cam0/data.csv` | Image Data List |
-| `cam0/data/` | Images Data |
-| `imu0/data.csv` | IMU Data |
-| `gps0/data.csv` | GNSS Data |
-| `dem0/*.tif`, `dem0/*.tiff`, `dem0/*.vrt` | Georeferenced DEM rasters |
+| `cam0/data.csv` | Image List |
+| `cam0/data/` | Images |
+| `imu0/data.csv` | IMU Measurement |
+| `gps0/data.csv` | GNSS Fix |
+| `dem0/*.tif` | DEM Raster |
 
-With `dem_parameters.use: true`, DEM rasters are loaded automatically from `dem0/`.
 
 ## Run
 
