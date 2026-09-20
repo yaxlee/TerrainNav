@@ -21,8 +21,8 @@ We evaluate five public and six field sequences. On the field sequences, adding 
 ## Build
 
 ```bash
-git clone
-cd DGVI-SLAM
+git clone /path/to/%repository%
+cd $repository$
 git submodule update --init --recursive
 ```
 
