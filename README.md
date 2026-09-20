@@ -71,7 +71,7 @@ Choose a profile and verify its calibration and acquisition settings:
 
 
 ```bash
-# Camera + IMU + GNSS + one or more DEM tiles
+# Camera + IMU + GNSS + DEM
 ./build/dgvi_slam_app config/field/dgvi_slam.yaml \
   /path/to/sequence results/field /path/to/dem.tif
 ```
