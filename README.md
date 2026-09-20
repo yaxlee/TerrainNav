@@ -52,8 +52,8 @@ the sensor folders):
 |---|---|
 | `cam0/data.csv` | Image List |
 | `cam0/data/` | Images |
-| `imu0/data.csv` | IMU Measurement |
-| `gps0/data.csv` | GNSS Fix |
+| `imu0/data.csv` | IMU Measurements |
+| `gps0/data.csv` | GNSS Fixes |
 | `dem0/*.tif` | DEM Raster |
 
 
