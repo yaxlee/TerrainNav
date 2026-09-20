@@ -61,11 +61,6 @@ With `dem_parameters.use: true`, DEM rasters are loaded automatically from `dem0
 
 ## Run
 
-The executable is `dgvi_slam_app`. It accepts a dataset in the layout above,
-and an optional output directory. The standard reader accepts either a sequence
-directory containing `mav0/` or `mav0/` itself. Explicit DEM raster paths remain
-available as an override. `-rpg` selects the inherited RPG reader (without DEM).
-
 | Included profile | Purpose |
 |---|---|
 | [Field](config/field.yaml) | Self-collected monocular visual-inertial data with geodetic GNSS |
