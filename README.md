@@ -51,13 +51,13 @@ Use the converted dataset layout expected by `DatasetReader`:
 
 | Path | Contents |
 |---|---|
-| `cam0/data.csv` | Header, then `timestamp_ns,filename` |
-| `cam0/data/` | Images referenced by the camera CSV |
-| `imu0/data.csv` | Header, then `timestamp_ns,wx,wy,wz,ax,ay,az` |
-| `gps0/data.csv` | Geodetic GNSS records described below |
-| `dem0/.tif` | DEM |
+| `cam0/data.csv` | Image Data List |
+| `cam0/data/` | Images Data |
+| `imu0/data.csv` | IMU Data |
+| `gps0/data.csv` | GNSS Data |
+| `dem0/.tif` | DEM Data |
 
-DEM rasters are supplied separately as GeoTIFF (`.tif`/`.tiff`) or GDAL VRT files. Rasters must contain usable georeferencing and cover the route. Multiple rasters are queried in command-line order, using the first valid height. GNSS altitude, DEM height, sensor height, and the selected geoid model must follow a consistent vertical convention. See [configuration guidance](config/README.md).
+DEM rasters are supplied separately as GeoTIFF (`.tif`/`.tiff`). See [configuration guidance](config/README.md).
 
 ## Run
 
@@ -65,8 +65,8 @@ Choose a profile and verify its calibration and acquisition settings:
 
 | Profile | Purpose |
 |---|---|
-| [Field](config/field/dgvi_slam.yaml) | Field-system profile|
-| [FusionPortableV2 + DEM](config/fusionportable/dgvi_slam.yaml) | FusionPortableV2 profile |
+| [Self-collected](config/field/dgvi_slam.yaml) | Self-collected Dataset profile|
+| [FusionPortableV2](config/fusionportable/dgvi_slam.yaml) | FusionPortableV2 profile |
 | [UrbanLoco](config/urbanloco/dgvi_slam.yaml) | UrbanLoco profile |
 
 
@@ -76,7 +76,7 @@ Choose a profile and verify its calibration and acquisition settings:
   /path/to/sequence results/field /path/to/dem.tif
 ```
 
-## Outputs and 
+## Outputs
 
 For SLAM mode, output filenames start with `dgvi-slam-slam`; disabling loop closure changes the mode to `vio`.
 
@@ -89,17 +89,5 @@ For SLAM mode, output filenames start with `dgvi-slam-slam`; disabling loop clos
 | `-global-final-ba_trajectory.csv` | Corresponding global export |
 | `-final_map.csv` | Landmark map when final BA and map saving are enabled |
 
-The paper uses independent INS ground truth for FusionPortableV2, GNSS-fix consistency for UrbanLoco, and offline LiDAR–inertial reference trajectories for the field sequences. 
-## Code map
-
-| Location | Responsibility |
-|---|---|
-| `okvis_apps/src/dgvi_slam_app.cpp` | Offline application, sensor callbacks, DEM setup, trajectory output |
-| `okvis_multisensor_processing/src/DatasetReader.cpp` | Input parsing, GNSS screening, geoid handling, raster queries |
-| `okvis_ceres/src/ViGraph.cpp` | GNSS factors, global initialization, bounded recovery |
-| `okvis_ceres/src/ViSlamBackend.cpp` | Backend coordination, height blending, DEM-factor refresh |
-| `okvis_ceres/src/DemHeightError.cpp` | DEM height residual and Jacobians |
-| `okvis_common/src/ViParametersReader.cpp` | Configuration parser |
-| `config/` | Dataset profiles and parameter guidance |
-
-The `okvis` C++ namespace, library targets, source directories, and upstream copyright notices are retained to preserve provenance and library compatibility. The CMake project and ROS package are named `dgvi_slam`. Inherited ROS node executable names and topic namespaces remain unchanged.
+## Self-collected Dataset
+Our self-collected datasets are available in anonymous huggingface repository: https://anonymous-hf.com/a/4vgrxcfti2mp/.
