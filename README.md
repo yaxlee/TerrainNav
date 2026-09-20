@@ -16,7 +16,7 @@ DGVI-SLAM combines camera and IMU measurements, position-fix GNSS, and a georefe
 - Queries DEM tiles at estimated global positions and adds height constraints after global alignment is fixed.
 - Applies bounded translations to active poses and landmarks during sustained GNSS–VIO disagreement.
 
-We evaluate five public and six field sequences. On the field sequences, adding DEM reduces the median SE(3)-aligned position RMSE from 6.17 to 4.32 m (30.0%), relative to offline LIO-SAM reference trajectories.
+We evaluate five public and six self-collected sequences. On the self-collected sequences, adding DEM reduces the median SE(3)-aligned position RMSE from 6.17 to 4.32 m (30.0%), relative to offline LIO-SAM reference trajectories.
 
 ## Build
 
@@ -55,8 +55,6 @@ Use the converted dataset layout expected by `DatasetReader`:
 | `gps0/data.csv` | GNSS Data |
 | `dem0/.tif` | DEM Data |
 
-DEM rasters are supplied separately as GeoTIFF (`.tif`/`.tiff`). See [configuration guidance](config/README.md).
-
 ## Run
 
 The executable is `dgvi_slam_app`. It accepts a dataset in the layout above,
@@ -73,49 +71,11 @@ inherited RPG reader (without DEM).
 ./build/dgvi_slam_app config/field.yaml /path/to/sequence results/field
 
 # Camera + IMU + geodetic GNSS + DEM, using your calibrated configuration
-./build/dgvi_slam_app /path/to/dgvi_slam.yaml \
-  /path/to/sequence results/field /path/to/dem.tif
+./build/dgvi_slam_app /path/to/field.yaml \
+  /path/to/self-collected-sequence /path/tp/result
 ```
 
-All three included profiles use geodetic GNSS and include stationarity settings.
-Their calibration and estimator parameters are specific to each sensor setup.
-DEM is not enabled in these profiles. See [configuration guidance](config/README.md).
-
-The repository builds the standalone dataset application in `dgvi/app/` and its
-supporting libraries in `dgvi/`. The shared estimator depends on `dgvi/mapping` and
-`supereight2`. `USE_NN=ON` optionally enables frontend keypoint classification
-using `resources/fast-scnn.pt` and requires LibTorch. Regression tests can be
-enabled with `-DBUILD_TESTS=ON`.
-
-## Source layout
-
-```text
-dgvi/
-  app/src/                  Dataset application entry point
-  ceres/                    Optimization backend and residuals
-  common/                   Parameters and shared interfaces
-  cv/                       Camera models and frames
-  frontend/                 Feature matching and loop closure
-  kinematics/               Transformations
-  mapping/                  Mapping support
-  multisensor_processing/   Dataset readers and SLAM orchestration
-  time/                     Time and duration types
-  timing/                   Performance timers
-  util/                     Shared utilities
-```
-
-## Outputs
-
-For SLAM mode, output filenames start with `dgvi-slam-slam`; disabling loop closure changes the mode to `vio`.
-
-| Suffix | Contents |
-|---|---|
-| `_trajectory.csv` | Streamed optimized states in the local world frame |
-| `-final_trajectory.csv` | Final local trajectory |
-| `-global-final_trajectory.csv` | Global-frame trajectory when GNSS is configured and global output is available |
-| `-final-ba_trajectory.csv` | Export after the optional final-BA stage; the filename can be written even when BA is disabled |
-| `-global-final-ba_trajectory.csv` | Corresponding global export |
-| `-final_map.csv` | Landmark map when final BA and map saving are enabled |
+See [configuration guidance](config/README.md).
 
 ## Self-collected Dataset
 Our self-collected datasets are available in anonymous huggingface repository: https://anonymous-hf.com/a/4vgrxcfti2mp/.
